@@ -7,21 +7,35 @@ local M = {}
 local virtual_text_ns = 0
 local highlight_ns = 0
 
-local function setup_highlight_groups()
-  -- Get colors from LineNr highlight group
-  local linenr_hl = vim.api.nvim_get_hl(0, { name = "LineNr" })
-  local comment_hl = vim.api.nvim_get_hl(0, { name = "Comment" })
+local function get_normal_colors()
+  local normal = vim.api.nvim_get_hl(0, { name = "Normal" })
+  return {
+    bg = normal.bg and string.format("#%06x", normal.bg) or "#000000",
+    fg = normal.fg and string.format("#%06x", normal.fg) or "#ffffff",
+  }
+end
 
-  -- Create highlight group with LineNr fg as bg
-  vim.api.nvim_set_hl(0, "FlaresBackground", {
-    bg = linenr_hl.fg and string.format("#%06x", linenr_hl.fg),
-  })
+local function blend_hex_colors(color1, color2, blend_factor)
+  -- Convert hex to RGB
+  local r1, g1, b1 = tonumber(color1:sub(2, 3), 16), tonumber(color1:sub(4, 5), 16), tonumber(color1:sub(6, 7), 16)
+  local r2, g2, b2 = tonumber(color2:sub(2, 3), 16), tonumber(color2:sub(4, 5), 16), tonumber(color2:sub(6, 7), 16)
 
-  -- Create highlight group with LineNr fg as bg and Comment fg as fg
-  vim.api.nvim_set_hl(0, "FlaresComment", {
-    bg = linenr_hl.fg and string.format("#%06x", linenr_hl.fg),
-    fg = comment_hl.fg and string.format("#%06x", comment_hl.fg),
-  })
+  -- Blend RGB values
+  local r = math.floor(r1 * (1 - blend_factor) + r2 * blend_factor)
+  local g = math.floor(g1 * (1 - blend_factor) + g2 * blend_factor)
+  local b = math.floor(b1 * (1 - blend_factor) + b2 * blend_factor)
+
+  -- Convert back to hex
+  return string.format("#%02x%02x%02x", r, g, b)
+end
+
+local function setup_highlights()
+  local colors = get_normal_colors()
+  local blended_bg = blend_hex_colors(colors.bg, colors.fg, 0.05)
+  local blended_fg = blend_hex_colors(colors.bg, colors.fg, 0.2)
+
+  vim.api.nvim_set_hl(0, "FlaresBackground", { bg = blended_bg })
+  vim.api.nvim_set_hl(0, "FlaresComment", { bg = blended_bg, fg = blended_fg })
 end
 
 M.setup = function()
@@ -29,7 +43,7 @@ M.setup = function()
   virtual_text_ns = vim.api.nvim_create_namespace("flares_nvim_vtext")
   highlight_ns = vim.api.nvim_create_namespace("flares_nvim_highlight")
 
-  setup_highlight_groups()
+  setup_highlights()
 end
 
 M.set_virtual_text = function(bufnr, opts)
@@ -60,32 +74,6 @@ end
 M.clear_virtual_text = function(buffer)
   vim.api.nvim_buf_clear_namespace(buffer, virtual_text_ns, 0, -1)
 end
-
--- M.highlight_line = function(buffer, opts)
---   local line = opts.line or 0
---   local bg_color = opts.bg_color
---   local new_hl_group = "FlaresNvim" .. highlight_ns .. "_" .. line
---
---   -- Get color from highlight group if a group name is provided
---   if type(bg_color) == "string" and not bg_color:match("^#") then
---     local existing_hl = vim.api.nvim_get_hl(0, { name = bg_color })
---     print("Got existing highlight", vim.inspect(existing_hl))
---     -- Try bg first, then fg if bg is nil
---     bg_color = existing_hl.bg and string.format("#%06x", existing_hl.bg)
---       or existing_hl.fg and string.format("#%06x", existing_hl.fg)
---       or nil
---   end
---
---   print("Using bg_color", bg_color)
---
---   -- Create highlight group
---   vim.api.nvim_set_hl(0, new_hl_group, { bg = bg_color })
---
---   return vim.api.nvim_buf_set_extmark(buffer, highlight_ns, line, 0, {
---     line_hl_group = new_hl_group,
---     priority = 10,
---   })
--- end
 
 M.highlight_line = function(buffer, opts)
   local line = opts.line or 0
