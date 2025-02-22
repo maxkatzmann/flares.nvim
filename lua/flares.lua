@@ -32,18 +32,25 @@ M.setup = function()
   setup_highlight_groups()
 end
 
-M.set_virtual_text = function(buffer, opts)
+M.set_virtual_text = function(bufnr, opts)
   local text = opts.text or ""
   local hl_group = opts.hl_group or "Normal"
 
-  local extmark_opts = {
-    id = opts.id,
+  -- local extmark_opts = {
+  --   id = opts.id,
+  --   virt_text = { { text, hl_group } },
+  --   virt_text_pos = opts.position or "right_align",
+  --   priority = opts.priority or 1,
+  -- }
+  --
+  -- return vim.api.nvim_buf_set_extmark(buffer, virtual_text_ns, opts.line or 0, opts.col or 0, extmark_opts)
+  vim.api.nvim_buf_set_extmark(bufnr, virtual_text_ns, opts.line or 0, opts.col or 0, {
     virt_text = { { text, hl_group } },
-    virt_text_pos = opts.position or "right_align",
-    priority = opts.priority or 1,
-  }
-
-  return vim.api.nvim_buf_set_extmark(buffer, virtual_text_ns, opts.line or 0, opts.col or 0, extmark_opts)
+    virt_text_pos = "overlay",
+    -- Move to next line
+    virt_lines = { { text, hl_group } },
+    virt_lines_above = false,
+  })
 end
 
 M.current_buffer = function()
@@ -132,6 +139,22 @@ M.get_document_symbols = function(bufnr)
   return symbols
 end
 
+M.add_virtual_line_above = function(bufnr, linenr, text, highlight_group)
+  -- Get window width
+  local win_width = vim.api.nvim_win_get_width(0)
+  -- Pad the text to fill the entire line width
+  local padded_text = text .. string.rep(" ", win_width - vim.fn.strdisplaywidth(text))
+
+  vim.api.nvim_buf_set_extmark(bufnr, virtual_text_ns, linenr - 1, 0, {
+    virt_lines = {
+      {
+        { padded_text, highlight_group }, -- The padding will now be included in the highlight
+      },
+    },
+    virt_lines_above = true,
+  })
+end
+
 M.highlight_lsp_content = function(bufnr)
   local lsp_content = M.get_document_symbols(bufnr)
 
@@ -141,16 +164,27 @@ M.highlight_lsp_content = function(bufnr)
     [6] = "󰰐",
   }
 
+  local inline = false
+
   for _, symbol in ipairs(lsp_content) do
-    M.highlight_line(bufnr, {
-      line = symbol.range.start.line,
-      hl_group = "FlaresBackground", -- Use our custom group
-    })
-    M.set_virtual_text(bufnr, {
-      line = symbol.range.start.line,
-      text = name_for_kind[symbol.kind] .. " " .. symbol.name,
-      hl_group = "FlaresComment", -- Use our custom group
-    })
+    if inline then
+      M.highlight_line(bufnr, {
+        line = symbol.range.start.line,
+        hl_group = "FlaresBackground", -- Use our custom group
+      })
+      M.set_virtual_text(bufnr, {
+        line = symbol.range.start.line,
+        text = name_for_kind[symbol.kind] .. " " .. symbol.name,
+        hl_group = "FlaresComment", -- Use our custom group
+      })
+    else
+      M.add_virtual_line_above(
+        M.current_buffer(),
+        symbol.range.start.line + 1,
+        name_for_kind[symbol.kind] .. " " .. symbol.name,
+        "FlaresComment"
+      )
+    end
   end
 end
 
