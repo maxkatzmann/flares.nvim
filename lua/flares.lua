@@ -6,6 +6,8 @@ local M = {}
 -- Store namespace IDs internally
 local virtual_text_ns = 0
 local highlight_ns = 0
+-- Store the setup state
+local is_setup = false
 
 local function get_normal_colors()
   local normal = vim.api.nvim_get_hl(0, { name = "Normal" })
@@ -38,11 +40,49 @@ local function setup_highlights()
   vim.api.nvim_set_hl(0, "FlaresComment", { bg = blended_bg, fg = blended_fg })
 end
 
+-- Check if buffer has symbol-providing LSP clients
+local function has_symbol_clients(bufnr)
+  local clients = vim.lsp.get_clients({ bufnr = bufnr })
+  for _, client in ipairs(clients) do
+    if client.server_capabilities.documentSymbolProvider then
+      return true
+    end
+  end
+  return false
+end
+
 M.setup = function(opts)
+  if is_setup then
+    return
+  end
+  is_setup = true
+
   opts = opts or {}
 
   M.mode = opts.mode or "inline_icon_and_name"
   setup_highlights()
+
+  -- Create an autocmd group
+  local group = vim.api.nvim_create_augroup("FlareAutoAttach", { clear = true })
+
+  -- Watch for LSP attach events
+  vim.api.nvim_create_autocmd("LspAttach", {
+    group = group,
+    callback = function(args)
+      local bufnr = args.buf
+      -- Check if the attached LSP provides symbols
+      if has_symbol_clients(bufnr) then
+        M.attach_to_buffer(bufnr)
+      end
+    end,
+  })
+
+  -- Check currently active buffers
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if has_symbol_clients(bufnr) then
+      M.attach_to_buffer(bufnr)
+    end
+  end
 end
 
 M.setup_namespaces = function()
