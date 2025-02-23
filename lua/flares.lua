@@ -1,6 +1,6 @@
 -- Clear user commands if they already exist so that we can re-define them below.
-pcall(vim.api.nvim_del_user_command, "FlaresHighlight")
-pcall(vim.api.nvim_del_user_command, "FlaresClear")
+pcall(vim.api.nvim_del_user_command, "FlaresShow")
+pcall(vim.api.nvim_del_user_command, "FlaresHide")
 
 local M = {}
 
@@ -167,72 +167,31 @@ M.add_line_above_flare = function(bufnr, linenr, text, highlight_group)
   })
 end
 
-local flare_addition_handlers = {
-  above_kind = function(bufnr, line, _, kind)
-    M.add_line_above_flare(bufnr, line + 1, M.display_text_for_kind[kind], "FlaresComment")
-  end,
-  above_icon_and_name = function(bufnr, line, name, kind)
-    M.add_line_above_flare(bufnr, line + 1, M.icon_for_kind[kind] .. " " .. name, "FlaresComment")
-  end,
-  inline_icon_and_name = function(bufnr, line, name, kind)
-    M.add_highlight_flare(bufnr, {
-      line = line,
-      hl_group = "FlaresBackground",
-    })
-    M.add_text_flare(bufnr, {
-      line = line,
-      text = M.icon_for_kind[kind] .. " " .. name,
-      hl_group = "FlaresComment",
-    })
-  end,
-  inline_name = function(bufnr, line, name, _)
-    M.add_highlight_flare(bufnr, {
-      line = line,
-      hl_group = "FlaresBackground",
-    })
-    M.add_text_flare(bufnr, {
-      line = line,
-      text = name,
-      hl_group = "FlaresComment",
-    })
-  end,
-  inline_icon = function(bufnr, line, _, kind)
-    M.add_highlight_flare(bufnr, {
-      line = line,
-      hl_group = "FlaresBackground",
-    })
-    M.add_text_flare(bufnr, {
-      line = line,
-      text = M.icon_for_kind[kind],
-      hl_group = "FlaresComment",
-    })
-  end,
-  inline_kind = function(bufnr, line, _, kind)
-    M.add_highlight_flare(bufnr, {
-      line = line,
-      hl_group = "FlaresBackground",
-    })
-    M.add_text_flare(bufnr, {
-      line = line,
-      text = M.display_text_for_kind[kind],
-      hl_group = "FlaresComment",
-    })
-  end,
-  highlight_only = function(bufnr, line, _, _)
-    M.add_highlight_flare(bufnr, {
-      line = line,
-      hl_group = "FlaresBackground",
-    })
-  end,
-}
+local function get_flare_display_string_for_symbol(symbol)
+  local result = ""
+
+  for _, entry in ipairs(M.display_contents) do
+    if entry == "icon" then
+      result = result .. M.icon_for_kind[symbol.kind] .. " "
+    elseif entry == "kind" then
+      result = result .. M.display_text_for_kind[symbol.kind] .. " "
+    elseif entry == "name" then
+      result = result .. symbol.name .. " "
+    else
+      error("[Flares] Invalid display content: " .. entry)
+    end
+  end
+
+  return result
+end
 
 M.add_flares = function(bufnr)
   M.define_namespaces()
 
   local lsp_content = M.get_document_symbols(bufnr)
 
-  local handler = flare_addition_handlers[M.mode]
-  if not handler then
+  -- If the mode is not 'inline' or 'above', print an error and return
+  if not vim.tbl_contains({ "inline", "above" }, M.mode) then
     error("[Flares] Invalid display mode: " .. tostring(M.mode))
     return
   end
@@ -240,11 +199,28 @@ M.add_flares = function(bufnr)
   local last_line = 0
 
   for _, symbol in ipairs(lsp_content) do
-    -- Clear until the current line
+    local line = symbol.range.start.line
+    local display_string = get_flare_display_string_for_symbol(symbol)
+
+    -- Clear flares until the current line
     M.clear_all_flares_in_lines(bufnr, last_line + 1, symbol.range.start.line + 1)
+
+    -- Add the new flare
+    if M.mode == "inline" then
+      M.add_highlight_flare(bufnr, {
+        line = line,
+        hl_group = "FlaresBackground",
+      })
+
+      M.add_text_flare(bufnr, {
+        line = line,
+        text = display_string,
+        hl_group = "FlaresComment",
+      })
+    elseif M.mode == "above" then
+      M.add_line_above_flare(bufnr, line + 1, display_string, "FlaresComment")
+    end
     last_line = symbol.range.start.line
-    -- Add the new highlight/text
-    handler(bufnr, symbol.range.start.line, symbol.name, symbol.kind)
   end
 
   -- Clear until the end of the buffer
@@ -370,7 +346,9 @@ M.setup = function(opts)
 
   opts = opts or {}
 
-  M.mode = opts.mode or "inline_icon_and_name"
+  M.mode = opts.mode or "inline"
+
+  M.display_contents = opts.display_contents or { "icon", "kind", "name" }
 
   M.icon_for_kind = {
     [5] = opts.icons and opts.icons.Class or "",
@@ -398,28 +376,42 @@ function M.clear_autocommands()
   vim.api.nvim_clear_autocmds({ group = "FlareEventListeners" })
 end
 
-vim.api.nvim_create_user_command("FlaresHighlight", function(opts)
-  local mode = opts.args or "inline_icon_and_name"
+vim.api.nvim_create_user_command("FlaresShow", function(opts)
+  local args = vim.split(opts.args, " ")
+  local mode = args[1]
+
+  if not vim.tbl_contains({ "above", "inline" }, mode) then
+    error("[Flares] Invalid mode: " .. tostring(mode))
+    return
+  end
+
+  local display_contents = {}
+  for i = 2, #args do
+    if vim.tbl_contains({ "kind", "icon", "name" }, args[i]) then
+      table.insert(display_contents, args[i])
+    else
+      error("[Flares] Invalid display content: " .. args[i])
+    end
+  end
+
   M.mode = mode
+  M.display_contents = display_contents
+
   M.attach_to_buffer(M.current_buffer())
   M.add_flares(M.current_buffer())
 end, {
-  nargs = 1,
-  complete = function(_, _, _)
-    -- Return list of completion options
-    return {
-      "above_kind",
-      "above_icon_and_name",
-      "inline_icon_and_name",
-      "inline_icon",
-      "inline_name",
-      "inline_kind",
-      "highlight_only",
-    }
+  nargs = "+",
+  complete = function(_, cmd_line, _)
+    local args = vim.split(cmd_line, " ")
+    if #args == 2 then
+      return { "above", "inline" }
+    else
+      return { "kind", "icon", "name" }
+    end
   end,
 })
 
-vim.api.nvim_create_user_command("FlaresClear", function()
+vim.api.nvim_create_user_command("FlaresHide", function()
   M.define_namespaces()
   M.clear_all_flares(M.current_buffer())
   M.clear_autocommands()
