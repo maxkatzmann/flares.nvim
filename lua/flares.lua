@@ -345,7 +345,7 @@ local function setup_dynamic_updates(bufnr)
     group = group,
     buffer = bufnr,
     callback = function()
-      require("flares").highlight_lsp_content(bufnr)
+      M.highlight_lsp_content(bufnr)
     end,
   })
 end
@@ -359,6 +359,9 @@ end
 -- Call this when initializing your plugin for a buffer
 M.attach_to_buffer = function(bufnr)
   setup_dynamic_updates(bufnr)
+  debounced_update(function()
+    M.highlight_lsp_content(bufnr)
+  end, 500)
 end
 
 M.clear_all = function(buffer)
@@ -393,5 +396,7 @@ vim.api.nvim_create_user_command("FlaresClear", function()
   M.clear_all(M.current_buffer())
   M.clear_autocommands()
 end, { range = true })
+
+-- TODO: Also highlight the end of the function?
 
 return M
