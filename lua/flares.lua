@@ -4,11 +4,20 @@ pcall(vim.api.nvim_del_user_command, "FlaresClear")
 
 local M = {}
 
+-- ######## STATE ########
+
 -- Initial namespace IDs to be overwritten later.
 local virtual_text_ns = 0
 local highlight_ns = 0
 -- Store the setup state
 local is_setup = false
+
+M.define_namespaces = function()
+  virtual_text_ns = vim.api.nvim_create_namespace("flares_nvim_vtext")
+  highlight_ns = vim.api.nvim_create_namespace("flares_nvim_highlight")
+end
+
+-- ######## COLORS ########
 
 local function get_normal_colors()
   local normal = vim.api.nvim_get_hl(0, { name = "Normal" })
@@ -32,7 +41,7 @@ local function blend_hex_colors(color1, color2, blend_factor)
   return string.format("#%02x%02x%02x", r, g, b)
 end
 
-local function setup_highlights()
+local function register_highlights()
   local colors = get_normal_colors()
   local blended_bg = blend_hex_colors(colors.bg, colors.fg, 0.033)
   local blended_fg = blend_hex_colors(colors.bg, colors.fg, 0.2)
@@ -40,6 +49,34 @@ local function setup_highlights()
   vim.api.nvim_set_hl(0, "FlaresBackground", { bg = blended_bg })
   vim.api.nvim_set_hl(0, "FlaresComment", { bg = blended_bg, fg = blended_fg })
 end
+
+-- ######## DEBOUNCING ########
+local timer = nil -- Store timer reference
+
+local function debounced_update(fn, delay)
+  -- Cancel existing timer if present
+  if timer then
+    timer:stop()
+    timer:close()
+  end
+
+  -- Create new timer
+  timer = vim.uv.new_timer()
+
+  -- Start timer with delay
+  timer:start(
+    delay,
+    0,
+    vim.schedule_wrap(function()
+      fn() -- Execute the actual update
+      timer:stop()
+      timer:close()
+      timer = nil
+    end)
+  )
+end
+
+-- ######## LSP ########
 
 -- Check if buffer has symbol-providing LSP clients
 local function has_symbol_clients(bufnr)
@@ -50,89 +87,6 @@ local function has_symbol_clients(bufnr)
     end
   end
   return false
-end
-
-M.setup = function(opts)
-  if is_setup then
-    return
-  end
-  is_setup = true
-
-  opts = opts or {}
-
-  M.mode = opts.mode or "inline_icon_and_name"
-  setup_highlights()
-
-  -- Create an autocmd group
-  local group = vim.api.nvim_create_augroup("FlareAutoAttach", { clear = true })
-
-  -- Watch for LSP attach events
-  vim.api.nvim_create_autocmd("LspAttach", {
-    group = group,
-    callback = function(args)
-      local bufnr = args.buf
-      -- Check if the attached LSP provides symbols
-      if has_symbol_clients(bufnr) then
-        M.attach_to_buffer(bufnr)
-      end
-    end,
-  })
-
-  -- Check currently active buffers
-  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-    if has_symbol_clients(bufnr) then
-      M.attach_to_buffer(bufnr)
-    end
-  end
-end
-
-M.setup_namespaces = function()
-  virtual_text_ns = vim.api.nvim_create_namespace("flares_nvim_vtext")
-  highlight_ns = vim.api.nvim_create_namespace("flares_nvim_highlight")
-end
-
-M.add_text_flare = function(bufnr, opts)
-  local text = opts.text or ""
-  local hl_group = opts.hl_group or "Normal"
-
-  local extmark_opts = {
-    id = opts.id,
-    virt_text = { { text, hl_group } },
-    virt_text_pos = opts.position or "right_align",
-    priority = opts.priority or 1,
-  }
-
-  return vim.api.nvim_buf_set_extmark(bufnr, virtual_text_ns, opts.line or 0, opts.col or 0, extmark_opts)
-end
-
-M.current_buffer = function()
-  return vim.fn.bufnr("%")
-end
-
-M.clear_text_flares_in_lines = function(bufnr, start_line, end_line)
-  vim.api.nvim_buf_clear_namespace(bufnr, virtual_text_ns, start_line or 0, end_line or -1)
-end
-
-M.add_highlight_flare = function(buffer, opts)
-  local line = opts.line or 0
-  local hl_group = opts.hl_group or "Normal" -- fallback to Normal if no group specified
-
-  return vim.api.nvim_buf_set_extmark(buffer, highlight_ns, line, 0, {
-    line_hl_group = hl_group,
-    priority = 10,
-  })
-end
-
-M.clear_highlight_flares_in_lines = function(buffer, start_line, end_line)
-  -- Clear all extmarks in the highlight namespace
-  vim.api.nvim_buf_clear_namespace(buffer, highlight_ns, start_line or 0, end_line or -1)
-
-  -- Clear all highlight groups created by the plugin
-  local pattern = "FlaresNvim" .. highlight_ns .. "_"
-  local highlights = vim.fn.getcompletion(pattern, "highlight")
-  for _, hl_group in ipairs(highlights) do
-    pcall(vim.api.nvim_del_hl, 0, hl_group)
-  end
 end
 
 M.get_document_symbols = function(bufnr)
@@ -169,6 +123,32 @@ M.get_document_symbols = function(bufnr)
   end
 
   return symbols
+end
+
+-- ######## FLARE ADDITION ########
+
+M.add_text_flare = function(bufnr, opts)
+  local text = opts.text or ""
+  local hl_group = opts.hl_group or "Normal"
+
+  local extmark_opts = {
+    id = opts.id,
+    virt_text = { { text, hl_group } },
+    virt_text_pos = opts.position or "right_align",
+    priority = opts.priority or 1,
+  }
+
+  return vim.api.nvim_buf_set_extmark(bufnr, virtual_text_ns, opts.line or 0, opts.col or 0, extmark_opts)
+end
+
+M.add_highlight_flare = function(buffer, opts)
+  local line = opts.line or 0
+  local hl_group = opts.hl_group or "Normal" -- fallback to Normal if no group specified
+
+  return vim.api.nvim_buf_set_extmark(buffer, highlight_ns, line, 0, {
+    line_hl_group = hl_group,
+    priority = 10,
+  })
 end
 
 M.add_line_above_flare = function(bufnr, linenr, text, highlight_group)
@@ -259,7 +239,7 @@ local flare_addition_handlers = {
 }
 
 M.add_flares = function(bufnr)
-  M.setup_namespaces()
+  M.define_namespaces()
 
   local lsp_content = M.get_document_symbols(bufnr)
 
@@ -283,29 +263,22 @@ M.add_flares = function(bufnr)
   M.clear_all_flares_in_lines(bufnr, last_line + 1)
 end
 
-local timer = nil -- Store timer reference
+-- ######## FLARE CLEARING ########
 
-local function debounced_update(fn, delay)
-  -- Cancel existing timer if present
-  if timer then
-    timer:stop()
-    timer:close()
+M.clear_text_flares_in_lines = function(bufnr, start_line, end_line)
+  vim.api.nvim_buf_clear_namespace(bufnr, virtual_text_ns, start_line or 0, end_line or -1)
+end
+
+M.clear_highlight_flares_in_lines = function(buffer, start_line, end_line)
+  -- Clear all extmarks in the highlight namespace
+  vim.api.nvim_buf_clear_namespace(buffer, highlight_ns, start_line or 0, end_line or -1)
+
+  -- Clear all highlight groups created by the plugin
+  local pattern = "FlaresNvim" .. highlight_ns .. "_"
+  local highlights = vim.fn.getcompletion(pattern, "highlight")
+  for _, hl_group in ipairs(highlights) do
+    pcall(vim.api.nvim_del_hl, 0, hl_group)
   end
-
-  -- Create new timer
-  timer = vim.uv.new_timer()
-
-  -- Start timer with delay
-  timer:start(
-    delay,
-    0,
-    vim.schedule_wrap(function()
-      fn() -- Execute the actual update
-      timer:stop()
-      timer:close()
-      timer = nil
-    end)
-  )
 end
 
 -- Register autocmds for dynamic updates
@@ -383,10 +356,49 @@ M.clear_all_flares_in_lines = function(bufnr, start_line, end_line)
   M.clear_highlight_flares_in_lines(bufnr, start_line, end_line)
 end
 
--- Create the user commands
+-- ######## SETUP ########
+M.setup = function(opts)
+  if is_setup then
+    return
+  end
+  is_setup = true
+
+  opts = opts or {}
+
+  M.mode = opts.mode or "inline_icon_and_name"
+  register_highlights()
+
+  -- Create an autocmd group
+  local group = vim.api.nvim_create_augroup("FlareAutoAttach", { clear = true })
+
+  -- Watch for LSP attach events
+  vim.api.nvim_create_autocmd("LspAttach", {
+    group = group,
+    callback = function(args)
+      local bufnr = args.buf
+      -- Check if the attached LSP provides symbols
+      if has_symbol_clients(bufnr) then
+        M.attach_to_buffer(bufnr)
+      end
+    end,
+  })
+
+  -- Check currently active buffers
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if has_symbol_clients(bufnr) then
+      M.attach_to_buffer(bufnr)
+    end
+  end
+end
+
+-- ######## USER COMMANDS ########
+M.current_buffer = function()
+  return vim.fn.bufnr("%")
+end
+
 vim.api.nvim_create_user_command("FlaresHighlight", function(opts)
   local mode = opts.args or "inline_icon_and_name"
-  M.setup({ mode = mode })
+  M.mode = mode
   M.attach_to_buffer(M.current_buffer())
   M.add_flares(M.current_buffer())
 end, {
@@ -406,11 +418,9 @@ end, {
 })
 
 vim.api.nvim_create_user_command("FlaresClear", function()
-  M.setup_namespaces()
+  M.define_namespaces()
   M.clear_all_flares(M.current_buffer())
   M.clear_autocommands()
 end, { range = true })
-
--- TODO: Also highlight the end of the function?
 
 return M
