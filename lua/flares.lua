@@ -53,9 +53,12 @@ end
 
 M.setup = function(opts)
   if is_setup then
+    print("[Flares] Already setup")
     return
   end
   is_setup = true
+
+  print("[Flares] Setting up")
 
   opts = opts or {}
 
@@ -70,9 +73,13 @@ M.setup = function(opts)
     group = group,
     callback = function(args)
       local bufnr = args.buf
+      print("[Flares] LSP attached to buffer", bufnr)
       -- Check if the attached LSP provides symbols
       if has_symbol_clients(bufnr) then
+        print("[Flares] Flares lighted in buffer")
         M.attach_to_buffer(bufnr)
+      else
+        print("[Flares] LSP does not provide symbols")
       end
     end,
   })
@@ -256,6 +263,9 @@ M.highlight_lsp_content = function(bufnr)
   M.clear_all(bufnr)
 
   local lsp_content = M.get_document_symbols(bufnr)
+
+  print("[Flares] Highlighting LSP content: " .. #lsp_content .. " symbols")
+
   local handler = display_handlers[M.mode]
   if not handler then
     error("[Flares] Invalid display mode: " .. tostring(M.mode))
@@ -317,6 +327,19 @@ local function setup_dynamic_updates(bufnr)
       debounced_update(function()
         M.highlight_lsp_content(bufnr)
       end, 500)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("LspProgress", {
+    pattern = { "end" },
+    callback = function(args)
+      if not is_setup then
+        return
+      end
+
+      if args.buf then
+        M.highlight_lsp_content(args.buf)
+      end
     end,
   })
 
