@@ -33,7 +33,7 @@ end
 
 local function setup_highlights()
   local colors = get_normal_colors()
-  local blended_bg = blend_hex_colors(colors.bg, colors.fg, 0.05)
+  local blended_bg = blend_hex_colors(colors.bg, colors.fg, 0.033)
   local blended_fg = blend_hex_colors(colors.bg, colors.fg, 0.2)
 
   vim.api.nvim_set_hl(0, "FlaresBackground", { bg = blended_bg })
