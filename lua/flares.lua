@@ -41,7 +41,7 @@ local function blend_hex_colors(color1, color2, blend_factor)
   return string.format("#%02x%02x%02x", r, g, b)
 end
 
-local function register_highlights()
+local function register_highlight_groups()
   local colors = get_normal_colors()
   local blended_bg = blend_hex_colors(colors.bg, colors.fg, 0.033)
   local blended_fg = blend_hex_colors(colors.bg, colors.fg, 0.2)
@@ -167,24 +167,12 @@ M.add_line_above_flare = function(bufnr, linenr, text, highlight_group)
   })
 end
 
-local icon_for_kind = {
-  [5] = "󰯲",
-  [12] = "󰯻",
-  [6] = "󰰐",
-}
-
-local display_text_for_kind = {
-  [5] = "Class",
-  [12] = "Function",
-  [6] = "Method",
-}
-
 local flare_addition_handlers = {
   above_kind = function(bufnr, line, _, kind)
-    M.add_line_above_flare(bufnr, line + 1, display_text_for_kind[kind], "FlaresComment")
+    M.add_line_above_flare(bufnr, line + 1, M.display_text_for_kind[kind], "FlaresComment")
   end,
   above_icon_and_name = function(bufnr, line, name, kind)
-    M.add_line_above_flare(bufnr, line + 1, icon_for_kind[kind] .. " " .. name, "FlaresComment")
+    M.add_line_above_flare(bufnr, line + 1, M.icon_for_kind[kind] .. " " .. name, "FlaresComment")
   end,
   inline_icon_and_name = function(bufnr, line, name, kind)
     M.add_highlight_flare(bufnr, {
@@ -193,7 +181,7 @@ local flare_addition_handlers = {
     })
     M.add_text_flare(bufnr, {
       line = line,
-      text = icon_for_kind[kind] .. " " .. name,
+      text = M.icon_for_kind[kind] .. " " .. name,
       hl_group = "FlaresComment",
     })
   end,
@@ -215,7 +203,7 @@ local flare_addition_handlers = {
     })
     M.add_text_flare(bufnr, {
       line = line,
-      text = icon_for_kind[kind],
+      text = M.icon_for_kind[kind],
       hl_group = "FlaresComment",
     })
   end,
@@ -226,7 +214,7 @@ local flare_addition_handlers = {
     })
     M.add_text_flare(bufnr, {
       line = line,
-      text = display_text_for_kind[kind],
+      text = M.display_text_for_kind[kind],
       hl_group = "FlaresComment",
     })
   end,
@@ -281,8 +269,43 @@ M.clear_highlight_flares_in_lines = function(buffer, start_line, end_line)
   end
 end
 
--- Register autocmds for dynamic updates
-local function setup_event_listeners(bufnr)
+M.clear_all_flares = function(bufnr)
+  M.clear_text_flares_in_lines(bufnr)
+  M.clear_highlight_flares_in_lines(bufnr)
+end
+
+M.clear_all_flares_in_lines = function(bufnr, start_line, end_line)
+  M.clear_text_flares_in_lines(bufnr, start_line, end_line)
+  M.clear_highlight_flares_in_lines(bufnr, start_line, end_line)
+end
+
+-- ######## SETUP ########
+
+local function setup_initialization_events()
+  -- Create an autocmd group
+  local group = vim.api.nvim_create_augroup("FlareAutoAttach", { clear = true })
+
+  -- Watch for LSP attach events
+  vim.api.nvim_create_autocmd("LspAttach", {
+    group = group,
+    callback = function(args)
+      local bufnr = args.buf
+      -- Check if the attached LSP provides symbols
+      if has_symbol_clients(bufnr) then
+        M.attach_to_buffer(bufnr)
+      end
+    end,
+  })
+
+  -- Check currently active buffers
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if has_symbol_clients(bufnr) then
+      M.attach_to_buffer(bufnr)
+    end
+  end
+end
+
+local function setup_update_events(bufnr)
   local group = vim.api.nvim_create_augroup("FlareEventListeners", { clear = true })
 
   -- Update on LSP symbol changes
@@ -332,31 +355,13 @@ local function setup_event_listeners(bufnr)
   })
 end
 
--- Function to remove all flare-related autocommands
-function M.clear_autocommands()
-  -- Clear all autocommands in our specific group
-  vim.api.nvim_clear_autocmds({ group = "FlareEventListeners" })
-end
-
--- Call this when initializing your plugin for a buffer
 M.attach_to_buffer = function(bufnr)
-  setup_event_listeners(bufnr)
+  setup_update_events(bufnr)
   debounced_update(function()
     M.add_flares(bufnr)
   end, 500)
 end
 
-M.clear_all_flares = function(bufnr)
-  M.clear_text_flares_in_lines(bufnr)
-  M.clear_highlight_flares_in_lines(bufnr)
-end
-
-M.clear_all_flares_in_lines = function(bufnr, start_line, end_line)
-  M.clear_text_flares_in_lines(bufnr, start_line, end_line)
-  M.clear_highlight_flares_in_lines(bufnr, start_line, end_line)
-end
-
--- ######## SETUP ########
 M.setup = function(opts)
   if is_setup then
     return
@@ -366,34 +371,31 @@ M.setup = function(opts)
   opts = opts or {}
 
   M.mode = opts.mode or "inline_icon_and_name"
-  register_highlights()
 
-  -- Create an autocmd group
-  local group = vim.api.nvim_create_augroup("FlareAutoAttach", { clear = true })
+  M.icon_for_kind = {
+    [5] = opts.icons and opts.icons.Class or "",
+    [6] = opts.icons and opts.icons.Method or "",
+    [12] = opts.icons and opts.icons.Function or "",
+  }
 
-  -- Watch for LSP attach events
-  vim.api.nvim_create_autocmd("LspAttach", {
-    group = group,
-    callback = function(args)
-      local bufnr = args.buf
-      -- Check if the attached LSP provides symbols
-      if has_symbol_clients(bufnr) then
-        M.attach_to_buffer(bufnr)
-      end
-    end,
-  })
+  M.display_text_for_kind = {
+    [5] = "Class",
+    [6] = "Method",
+    [12] = "Function",
+  }
 
-  -- Check currently active buffers
-  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-    if has_symbol_clients(bufnr) then
-      M.attach_to_buffer(bufnr)
-    end
-  end
+  register_highlight_groups()
+  setup_initialization_events()
 end
 
 -- ######## USER COMMANDS ########
 M.current_buffer = function()
   return vim.fn.bufnr("%")
+end
+
+function M.clear_autocommands()
+  -- Clear all autocommands in our specific group
+  vim.api.nvim_clear_autocmds({ group = "FlareEventListeners" })
 end
 
 vim.api.nvim_create_user_command("FlaresHighlight", function(opts)
