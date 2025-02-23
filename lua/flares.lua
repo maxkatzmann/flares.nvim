@@ -108,8 +108,8 @@ M.current_buffer = function()
   return vim.fn.bufnr("%")
 end
 
-M.clear_virtual_text = function(buffer)
-  vim.api.nvim_buf_clear_namespace(buffer, virtual_text_ns, 0, -1)
+M.clear_virtual_text = function(bufnr, start_line, end_line)
+  vim.api.nvim_buf_clear_namespace(bufnr, virtual_text_ns, start_line or 0, end_line or -1)
 end
 
 M.highlight_line = function(buffer, opts)
@@ -122,9 +122,9 @@ M.highlight_line = function(buffer, opts)
   })
 end
 
-M.clear_line_highlights = function(buffer)
+M.clear_line_highlights = function(buffer, start_line, end_line)
   -- Clear all extmarks in the highlight namespace
-  vim.api.nvim_buf_clear_namespace(buffer, highlight_ns, 0, -1)
+  vim.api.nvim_buf_clear_namespace(buffer, highlight_ns, start_line or 0, end_line or -1)
 
   -- Clear all highlight groups created by the plugin
   local pattern = "FlaresNvim" .. highlight_ns .. "_"
@@ -259,7 +259,6 @@ local display_handlers = {
 
 M.highlight_lsp_content = function(bufnr)
   M.setup_namespaces()
-  M.clear_all(bufnr)
 
   local lsp_content = M.get_document_symbols(bufnr)
 
@@ -269,7 +268,13 @@ M.highlight_lsp_content = function(bufnr)
     return
   end
 
+  local last_line = 0
+
   for _, symbol in ipairs(lsp_content) do
+    -- Clear until the current line
+    M.clear_between_lines(bufnr, last_line + 1, symbol.range.start.line + 1)
+    last_line = symbol.range.start.line
+    -- Add the new highlight/text
     handler(bufnr, symbol.range.start.line, symbol.name, symbol.kind)
   end
 end
@@ -364,9 +369,14 @@ M.attach_to_buffer = function(bufnr)
   end, 500)
 end
 
-M.clear_all = function(buffer)
-  M.clear_virtual_text(buffer)
-  M.clear_line_highlights(buffer)
+M.clear_all = function(bufnr)
+  M.clear_virtual_text(bufnr)
+  M.clear_line_highlights(bufnr)
+end
+
+M.clear_between_lines = function(bufnr, start_line, end_line)
+  M.clear_virtual_text(bufnr, start_line, end_line)
+  M.clear_line_highlights(bufnr, start_line, end_line)
 end
 
 -- Create the user commands
