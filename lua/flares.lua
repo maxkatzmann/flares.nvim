@@ -1,24 +1,16 @@
--- Clear user commands if they already exist so that we can re-define them below.
-pcall(vim.api.nvim_del_user_command, "FlaresShow")
-pcall(vim.api.nvim_del_user_command, "FlaresHide")
-
 local M = {}
 
 -- ######## STATE ########
 
--- Initial namespace IDs to be overwritten later.
-local virtual_text_ns = 0
-local highlight_ns = 0
--- Store the setup state
+-- Whether the plugin has been set up
 local is_setup = false
-
-M.define_namespaces = function()
-  virtual_text_ns = vim.api.nvim_create_namespace("flares_nvim_vtext")
-  highlight_ns = vim.api.nvim_create_namespace("flares_nvim_highlight")
-end
+-- The namespace for keeping track of flares
+local flares_ns = vim.api.nvim_create_namespace("flares_nvim")
 
 -- ######## COLORS ########
 
+--- Get the normal colors from the current theme.
+---@return table: A table containing the background and foreground colors in hex format.
 local function get_normal_colors()
   local normal = vim.api.nvim_get_hl(0, { name = "Normal" })
   return {
@@ -27,20 +19,24 @@ local function get_normal_colors()
   }
 end
 
+--- Blend two hex colors by a given factor.
+---@param color1 string: The first color in hex format.
+---@param color2 string: The second color in hex format.
+---@param blend_factor number: A number between 0 and 1 indicating the blend ratio.
+---@return string: The blended color in hex format.
 local function blend_hex_colors(color1, color2, blend_factor)
-  -- Convert hex to RGB
   local r1, g1, b1 = tonumber(color1:sub(2, 3), 16), tonumber(color1:sub(4, 5), 16), tonumber(color1:sub(6, 7), 16)
   local r2, g2, b2 = tonumber(color2:sub(2, 3), 16), tonumber(color2:sub(4, 5), 16), tonumber(color2:sub(6, 7), 16)
 
-  -- Blend RGB values
   local r = math.floor(r1 * (1 - blend_factor) + r2 * blend_factor)
   local g = math.floor(g1 * (1 - blend_factor) + g2 * blend_factor)
   local b = math.floor(b1 * (1 - blend_factor) + b2 * blend_factor)
 
-  -- Convert back to hex
   return string.format("#%02x%02x%02x", r, g, b)
 end
 
+--- Register highlight groups for flares.
+-- TODO: Make highlight groups configurable.
 local function register_highlight_groups()
   local colors = get_normal_colors()
   local blended_bg = blend_hex_colors(colors.bg, colors.fg, 0.033)
@@ -51,24 +47,26 @@ local function register_highlight_groups()
 end
 
 -- ######## DEBOUNCING ########
-local timer = nil -- Store timer reference
 
+-- Timer used for debouncing flare additions.
+local timer = nil
+
+--- Create a debounced function that delays invoking the provided function.
+---@param fn function: The function to debounce.
+---@param delay number: The delay in milliseconds.
 local function debounced_update(fn, delay)
-  -- Cancel existing timer if present
   if timer then
     timer:stop()
     timer:close()
   end
 
-  -- Create new timer
   timer = vim.uv.new_timer()
 
-  -- Start timer with delay
   timer:start(
     delay,
     0,
     vim.schedule_wrap(function()
-      fn() -- Execute the actual update
+      fn()
       timer:stop()
       timer:close()
       timer = nil
@@ -78,7 +76,9 @@ end
 
 -- ######## LSP ########
 
--- Check if buffer has symbol-providing LSP clients
+--- Check if a buffer has LSP clients that provide document symbols.
+---@param bufnr number: The buffer number.
+---@return boolean: True if there are symbol-providing LSP clients, false otherwise.
 local function has_symbol_clients(bufnr)
   local clients = vim.lsp.get_clients({ bufnr = bufnr })
   for _, client in ipairs(clients) do
@@ -89,20 +89,24 @@ local function has_symbol_clients(bufnr)
   return false
 end
 
+--- Get document symbols from the LSP for a given buffer.
+---@param bufnr number: The buffer number.
+---@return table: A table of symbols.
 M.get_document_symbols = function(bufnr)
   local params = { textDocument = vim.lsp.util.make_text_document_params() }
-
-  -- Create a table to store the symbols
-  local symbols = {}
   local result = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol", params, 500)
 
-  -- Define the kinds we want to keep
+  -- Define the kinds we want to add flares for
   local wanted_kinds = {
     [5] = true, -- Class
     [12] = true, -- Function
     [6] = true, -- Method
   }
 
+  -- Collect the symbols we want to add flares to
+  local symbols = {}
+
+  -- Recursively traverse the symbol tree
   local function traverse_symbols(symbol_list)
     for _, symbol in ipairs(symbol_list) do
       if wanted_kinds[symbol.kind] then
@@ -127,6 +131,10 @@ end
 
 -- ######## FLARE ADDITION ########
 
+--- Add a text flare to a buffer.
+---@param bufnr number: The buffer number.
+---@param opts table: A table containing options for the flare, such as text, hl_group, position, and priority.
+---@return number: The extmark ID.
 M.add_text_flare = function(bufnr, opts)
   local text = opts.text or ""
   local hl_group = opts.hl_group or "Normal"
@@ -138,35 +146,45 @@ M.add_text_flare = function(bufnr, opts)
     priority = opts.priority or 1,
   }
 
-  return vim.api.nvim_buf_set_extmark(bufnr, virtual_text_ns, opts.line or 0, opts.col or 0, extmark_opts)
+  return vim.api.nvim_buf_set_extmark(bufnr, flares_ns, opts.line or 0, opts.col or 0, extmark_opts)
 end
 
-M.add_highlight_flare = function(buffer, opts)
+--- Add a highlight flare to a buffer.
+---@param bufnr number: The buffer number.
+---@param opts table: A table containing options for the flare, such as line and hl_group.
+---@return number: The extmark ID.
+M.add_highlight_flare = function(bufnr, opts)
   local line = opts.line or 0
-  local hl_group = opts.hl_group or "Normal" -- fallback to Normal if no group specified
+  local hl_group = opts.hl_group or "Normal"
 
-  return vim.api.nvim_buf_set_extmark(buffer, highlight_ns, line, 0, {
+  return vim.api.nvim_buf_set_extmark(bufnr, flares_ns, line, 0, {
     line_hl_group = hl_group,
     priority = 10,
   })
 end
 
-M.add_line_above_flare = function(bufnr, linenr, text, highlight_group)
-  -- Get window width
+--- Add a line above flare to a buffer.
+---@param bufnr number: The buffer number.
+---@param linenr number: The line number above which to add the flare.
+---@param content string: The text to display.
+---@param highlight_group string: The highlight group to use.
+M.add_line_above_flare = function(bufnr, linenr, content, highlight_group)
   local win_width = vim.api.nvim_win_get_width(0)
-  -- Pad the text to fill the entire line width
-  local padded_text = text .. string.rep(" ", win_width - vim.fn.strdisplaywidth(text))
+  local padded_text = content .. string.rep(" ", win_width - vim.fn.strdisplaywidth(content))
 
-  vim.api.nvim_buf_set_extmark(bufnr, virtual_text_ns, linenr - 1, 0, {
+  vim.api.nvim_buf_set_extmark(bufnr, flares_ns, linenr - 1, 0, {
     virt_lines = {
       {
-        { padded_text, highlight_group }, -- The padding will now be included in the highlight
+        { padded_text, highlight_group },
       },
     },
     virt_lines_above = true,
   })
 end
 
+--- Get the display string for a symbol.
+---@param symbol unknown: The LSP symbol to get the display string for.
+---@return string: The display string.
 local function get_flare_display_string_for_symbol(symbol)
   local result = ""
 
@@ -185,28 +203,35 @@ local function get_flare_display_string_for_symbol(symbol)
   return result
 end
 
+--- Add flares to a buffer based on LSP document symbols.
+---@param bufnr number: The buffer number.
 M.add_flares = function(bufnr)
-  M.define_namespaces()
-
-  local lsp_content = M.get_document_symbols(bufnr)
-
-  -- If the mode is not 'inline' or 'above', print an error and return
+  -- Check whether we have a valid mode for displaying flares.
   if not vim.tbl_contains({ "inline", "above" }, M.mode) then
     error("[Flares] Invalid display mode: " .. tostring(M.mode))
     return
   end
 
+  -- Gather the LSP symbols for which we want to add flares.
+  local lsp_symbols = M.get_document_symbols(bufnr)
+  -- We clear previously added flares while adding new ones.
+  -- To that end, we keep track of the position at which we
+  -- last added a new flare and then clear all the ones between
+  -- this last one and the new one we add.
   local last_line = 0
 
-  for _, symbol in ipairs(lsp_content) do
+  for _, symbol in ipairs(lsp_symbols) do
+    -- Where to add the flare:
     local line = symbol.range.start.line
+    -- What to display for that flare:
     local display_string = get_flare_display_string_for_symbol(symbol)
 
-    -- Clear flares until the current line
-    M.clear_all_flares_in_lines(bufnr, last_line + 1, symbol.range.start.line + 1)
+    -- Clear the old flares between the last one added and the new one we want to add.
+    M.clear_flares_in_lines(bufnr, last_line + 1, symbol.range.start.line + 1)
 
-    -- Add the new flare
     if M.mode == "inline" then
+      -- When displaying the flare inline, we first add the background highlight
+      -- to the corresponding line and then add the virtual text.
       M.add_highlight_flare(bufnr, {
         line = line,
         hl_group = "FlaresBackground",
@@ -220,45 +245,41 @@ M.add_flares = function(bufnr)
     elseif M.mode == "above" then
       M.add_line_above_flare(bufnr, line + 1, display_string, "FlaresComment")
     end
+
     last_line = symbol.range.start.line
   end
 
-  -- Clear until the end of the buffer
-  M.clear_all_flares_in_lines(bufnr, last_line + 1)
+  -- Clear all the remaining flares in the buffer.
+  M.clear_flares_in_lines(bufnr, last_line + 1)
 end
 
 -- ######## FLARE CLEARING ########
 
-M.clear_text_flares_in_lines = function(bufnr, start_line, end_line)
-  vim.api.nvim_buf_clear_namespace(bufnr, virtual_text_ns, start_line or 0, end_line or -1)
-end
+--- Clear text flares in a range of lines.
+---@param bufnr number: The buffer number.
+---@param start_line number|nil: The starting line number.
+---@param end_line number|nil: The ending line number.
+M.clear_flares_in_lines = function(bufnr, start_line, end_line)
+  vim.api.nvim_buf_clear_namespace(bufnr, flares_ns, start_line or 0, end_line or -1)
 
-M.clear_highlight_flares_in_lines = function(buffer, start_line, end_line)
-  -- Clear all extmarks in the highlight namespace
-  vim.api.nvim_buf_clear_namespace(buffer, highlight_ns, start_line or 0, end_line or -1)
-
-  -- Clear all highlight groups created by the plugin
-  local pattern = "FlaresNvim" .. highlight_ns .. "_"
+  local pattern = "FlaresNvim" .. flares_ns .. "_"
   local highlights = vim.fn.getcompletion(pattern, "highlight")
   for _, hl_group in ipairs(highlights) do
     pcall(vim.api.nvim_del_hl, 0, hl_group)
   end
 end
 
+--- Clear all flares in a buffer.
+---@param bufnr number: The buffer number.
 M.clear_all_flares = function(bufnr)
-  M.clear_text_flares_in_lines(bufnr)
-  M.clear_highlight_flares_in_lines(bufnr)
-end
-
-M.clear_all_flares_in_lines = function(bufnr, start_line, end_line)
-  M.clear_text_flares_in_lines(bufnr, start_line, end_line)
-  M.clear_highlight_flares_in_lines(bufnr, start_line, end_line)
+  M.clear_flares_in_lines(bufnr)
 end
 
 -- ######## SETUP ########
-
+--- Setup initialization events for the plugin. This allows us to
+--- automatically show flares in all (existing and new) buffers that
+--- have LSP clients.
 local function setup_initialization_events()
-  -- Create an autocmd group
   local group = vim.api.nvim_create_augroup("FlareAutoAttach", { clear = true })
 
   -- Watch for LSP attach events
@@ -266,7 +287,6 @@ local function setup_initialization_events()
     group = group,
     callback = function(args)
       local bufnr = args.buf
-      -- Check if the attached LSP provides symbols
       if has_symbol_clients(bufnr) then
         M.attach_to_buffer(bufnr)
       end
@@ -281,33 +301,26 @@ local function setup_initialization_events()
   end
 end
 
+--- Setup update events for a buffer. We want to re-draw flares
+--- when the contents of the buffer have changed or the window
+--- as been resized.
+---@param bufnr number: The buffer number.
 local function setup_update_events(bufnr)
   local group = vim.api.nvim_create_augroup("FlareEventListeners", { clear = true })
 
-  -- Update on LSP symbol changes
   vim.api.nvim_create_autocmd("LspRequest", {
     group = group,
     pattern = "textDocument/documentSymbols",
     callback = function()
-      -- Add debouncing to avoid rapid updates
       debounced_update(function()
         M.add_flares(bufnr)
       end, 500)
     end,
   })
 
-  -- Update on buffer changes
-  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-    group = group,
-    buffer = bufnr,
-    callback = function()
-      -- Add debouncing to avoid rapid updates
-      debounced_update(function()
-        M.add_flares(bufnr)
-      end, 500)
-    end,
-  })
-
+  -- Without this event, flares may be drawn initially when the
+  -- buffer is opened, since we may have to wait for the LSP to
+  -- finish processing the document symbols.
   vim.api.nvim_create_autocmd("LspProgress", {
     pattern = { "end" },
     callback = function(args)
@@ -321,23 +334,32 @@ local function setup_update_events(bufnr)
     end,
   })
 
-  -- Update on window resize/layout changes
-  vim.api.nvim_create_autocmd({ "WinResized" }, {
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "WinResized", "WinNew" }, {
     group = group,
     buffer = bufnr,
     callback = function()
-      M.add_flares(bufnr)
+      debounced_update(function()
+        M.add_flares(bufnr)
+      end, 500)
     end,
   })
 end
 
+--- Attach the plugin to a buffer.
+---@param bufnr number: The buffer number.
 M.attach_to_buffer = function(bufnr)
   setup_update_events(bufnr)
+  -- When attaching to a buffer, it may happen that the LSP is
+  -- attached and ready before we are, in which case there is no
+  -- event that triggers initial flare drawing. To account for
+  -- this, we draw the flares immediately after attaching.
   debounced_update(function()
     M.add_flares(bufnr)
   end, 500)
 end
 
+--- Setup the flares.nvim plugin with options.
+---@param opts table: Configuration opts. Keys: mode, display_contents, icon_for_kind.
 M.setup = function(opts)
   if is_setup then
     return
@@ -367,42 +389,56 @@ M.setup = function(opts)
 end
 
 -- ######## USER COMMANDS ########
+
+--- Get the current buffer number.
+---@return number: The current buffer number.
 M.current_buffer = function()
   return vim.fn.bufnr("%")
 end
 
+--- Clear all autocommands in the `FlareEventListeners` group.
 function M.clear_autocommands()
-  -- Clear all autocommands in our specific group
   vim.api.nvim_clear_autocmds({ group = "FlareEventListeners" })
 end
 
+-- Clear command before re-defining it.
+pcall(vim.api.nvim_del_user_command, "FlaresShow")
+
 vim.api.nvim_create_user_command("FlaresShow", function(opts)
   local args = vim.split(opts.args, " ")
-  local mode = args[1]
 
-  if not vim.tbl_contains({ "above", "inline" }, mode) then
-    error("[Flares] Invalid mode: " .. tostring(mode))
-    return
-  end
+  -- Evaluating the mode argument.
+  if #args > 0 and args[1] and args[1] ~= "" then
+    local mode = args[1]
 
-  local display_contents = {}
-  for i = 2, #args do
-    if vim.tbl_contains({ "kind", "icon", "name" }, args[i]) then
-      table.insert(display_contents, args[i])
-    else
-      error("[Flares] Invalid display content: " .. args[i])
+    if not vim.tbl_contains({ "above", "inline" }, mode) then
+      error("[Flares] Invalid mode: " .. tostring(mode))
+      return
     end
+
+    M.mode = mode
   end
 
-  M.mode = mode
-  M.display_contents = display_contents
+  -- Evaluating the display content arguments.
+  if #args > 1 then
+    local display_contents = {}
+    for i = 2, #args do
+      if vim.tbl_contains({ "kind", "icon", "name" }, args[i]) then
+        table.insert(display_contents, args[i])
+      else
+        error("[Flares] Skipping invalid display content: " .. args[i])
+      end
+    end
+
+    M.display_contents = display_contents
+  end
 
   M.attach_to_buffer(M.current_buffer())
   M.add_flares(M.current_buffer())
 end, {
-  nargs = "+",
-  complete = function(_, cmd_line, _)
-    local args = vim.split(cmd_line, " ")
+  nargs = "*",
+  complete = function(_, line, _)
+    local args = vim.split(line, "%s+")
     if #args == 2 then
       return { "above", "inline" }
     else
@@ -411,8 +447,9 @@ end, {
   end,
 })
 
+-- Clear command before re-defining it.
+pcall(vim.api.nvim_del_user_command, "FlaresHide")
 vim.api.nvim_create_user_command("FlaresHide", function()
-  M.define_namespaces()
   M.clear_all_flares(M.current_buffer())
   M.clear_autocommands()
 end, { range = true })
