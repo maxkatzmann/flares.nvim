@@ -38,33 +38,30 @@ local function setup_highlights()
   vim.api.nvim_set_hl(0, "FlaresComment", { bg = blended_bg, fg = blended_fg })
 end
 
-M.setup = function()
-  -- Create namespaces once during setup
+M.setup = function(opts)
+  opts = opts or {}
+
+  M.mode = opts.mode or "inline_icon_and_name"
+  setup_highlights()
+end
+
+M.setup_namespaces = function()
   virtual_text_ns = vim.api.nvim_create_namespace("flares_nvim_vtext")
   highlight_ns = vim.api.nvim_create_namespace("flares_nvim_highlight")
-
-  setup_highlights()
 end
 
 M.set_virtual_text = function(bufnr, opts)
   local text = opts.text or ""
   local hl_group = opts.hl_group or "Normal"
 
-  -- local extmark_opts = {
-  --   id = opts.id,
-  --   virt_text = { { text, hl_group } },
-  --   virt_text_pos = opts.position or "right_align",
-  --   priority = opts.priority or 1,
-  -- }
-  --
-  -- return vim.api.nvim_buf_set_extmark(buffer, virtual_text_ns, opts.line or 0, opts.col or 0, extmark_opts)
-  vim.api.nvim_buf_set_extmark(bufnr, virtual_text_ns, opts.line or 0, opts.col or 0, {
+  local extmark_opts = {
+    id = opts.id,
     virt_text = { { text, hl_group } },
-    virt_text_pos = "overlay",
-    -- Move to next line
-    virt_lines = { { text, hl_group } },
-    virt_lines_above = false,
-  })
+    virt_text_pos = opts.position or "right_align",
+    priority = opts.priority or 1,
+  }
+
+  return vim.api.nvim_buf_set_extmark(bufnr, virtual_text_ns, opts.line or 0, opts.col or 0, extmark_opts)
 end
 
 M.current_buffer = function()
@@ -102,7 +99,7 @@ M.get_document_symbols = function(bufnr)
 
   -- Create a table to store the symbols
   local symbols = {}
-  local result = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol", params, 1000)
+  local result = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol", params, 500)
 
   -- Define the kinds we want to keep
   local wanted_kinds = {
@@ -143,37 +140,165 @@ M.add_virtual_line_above = function(bufnr, linenr, text, highlight_group)
   })
 end
 
+local icon_for_kind = {
+  [5] = "󰯲",
+  [12] = "󰯻",
+  [6] = "󰰐",
+}
+
+local display_text_for_kind = {
+  [5] = "Class",
+  [12] = "Function",
+  [6] = "Method",
+}
+
+local display_handlers = {
+  above_kind = function(bufnr, line, _, kind)
+    M.add_virtual_line_above(bufnr, line + 1, display_text_for_kind[kind], "FlaresComment")
+  end,
+  above_icon_and_name = function(bufnr, line, name, kind)
+    M.add_virtual_line_above(bufnr, line + 1, icon_for_kind[kind] .. " " .. name, "FlaresComment")
+  end,
+  inline_icon_and_name = function(bufnr, line, name, kind)
+    M.highlight_line(bufnr, {
+      line = line,
+      hl_group = "FlaresBackground",
+    })
+    M.set_virtual_text(bufnr, {
+      line = line,
+      text = icon_for_kind[kind] .. " " .. name,
+      hl_group = "FlaresComment",
+    })
+  end,
+  inline_name = function(bufnr, line, name, _)
+    M.highlight_line(bufnr, {
+      line = line,
+      hl_group = "FlaresBackground",
+    })
+    M.set_virtual_text(bufnr, {
+      line = line,
+      text = name,
+      hl_group = "FlaresComment",
+    })
+  end,
+  inline_icon = function(bufnr, line, _, kind)
+    M.highlight_line(bufnr, {
+      line = line,
+      hl_group = "FlaresBackground",
+    })
+    M.set_virtual_text(bufnr, {
+      line = line,
+      text = icon_for_kind[kind],
+      hl_group = "FlaresComment",
+    })
+  end,
+  inline_kind = function(bufnr, line, _, kind)
+    M.highlight_line(bufnr, {
+      line = line,
+      hl_group = "FlaresBackground",
+    })
+    M.set_virtual_text(bufnr, {
+      line = line,
+      text = display_text_for_kind[kind],
+      hl_group = "FlaresComment",
+    })
+  end,
+  highlight_only = function(bufnr, line, _, _)
+    M.highlight_line(bufnr, {
+      line = line,
+      hl_group = "FlaresBackground",
+    })
+  end,
+}
+
 M.highlight_lsp_content = function(bufnr)
+  M.setup_namespaces()
+  M.clear_all(bufnr)
+
   local lsp_content = M.get_document_symbols(bufnr)
-
-  local name_for_kind = {
-    [5] = "󰯲",
-    [12] = "󰯻",
-    [6] = "󰰐",
-  }
-
-  local inline = false
+  local handler = display_handlers[M.mode]
+  if not handler then
+    error("[Flares] Invalid display mode: " .. tostring(M.mode))
+    return
+  end
 
   for _, symbol in ipairs(lsp_content) do
-    if inline then
-      M.highlight_line(bufnr, {
-        line = symbol.range.start.line,
-        hl_group = "FlaresBackground", -- Use our custom group
-      })
-      M.set_virtual_text(bufnr, {
-        line = symbol.range.start.line,
-        text = name_for_kind[symbol.kind] .. " " .. symbol.name,
-        hl_group = "FlaresComment", -- Use our custom group
-      })
-    else
-      M.add_virtual_line_above(
-        M.current_buffer(),
-        symbol.range.start.line + 1,
-        name_for_kind[symbol.kind] .. " " .. symbol.name,
-        "FlaresComment"
-      )
-    end
+    handler(bufnr, symbol.range.start.line, symbol.name, symbol.kind)
   end
+end
+
+local timer = nil -- Store timer reference
+
+local function debounced_update(fn, delay)
+  -- Cancel existing timer if present
+  if timer then
+    timer:stop()
+    timer:close()
+  end
+
+  -- Create new timer
+  timer = vim.uv.new_timer()
+
+  -- Start timer with delay
+  timer:start(
+    delay,
+    0,
+    vim.schedule_wrap(function()
+      fn() -- Execute the actual update
+      timer:stop()
+      timer:close()
+      timer = nil
+    end)
+  )
+end
+
+-- Register autocmds for dynamic updates
+local function setup_dynamic_updates(bufnr)
+  local group = vim.api.nvim_create_augroup("FlareDynamicUpdates", { clear = true })
+
+  -- Update on LSP symbol changes
+  vim.api.nvim_create_autocmd("LspRequest", {
+    group = group,
+    pattern = "textDocument/documentSymbols",
+    callback = function()
+      -- Add debouncing to avoid rapid updates
+      debounced_update(function()
+        M.highlight_lsp_content(bufnr)
+      end, 500)
+    end,
+  })
+
+  -- Update on buffer changes
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      -- Add debouncing to avoid rapid updates
+      debounced_update(function()
+        M.highlight_lsp_content(bufnr)
+      end, 500)
+    end,
+  })
+
+  -- Update on window resize/layout changes
+  vim.api.nvim_create_autocmd({ "WinResized" }, {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      require("flares").highlight_lsp_content(bufnr)
+    end,
+  })
+end
+
+-- Function to remove all flare-related autocommands
+function M.clear_autocommands()
+  -- Clear all autocommands in our specific group
+  vim.api.nvim_clear_autocmds({ group = "FlareDynamicUpdates" })
+end
+
+-- Call this when initializing your plugin for a buffer
+M.attach_to_buffer = function(bufnr)
+  setup_dynamic_updates(bufnr)
 end
 
 M.clear_all = function(buffer)
@@ -182,14 +307,31 @@ M.clear_all = function(buffer)
 end
 
 -- Create the user commands
-vim.api.nvim_create_user_command("FlaresHighlight", function()
-  M.setup()
+vim.api.nvim_create_user_command("FlaresHighlight", function(opts)
+  local mode = opts.args or "inline_icon_and_name"
+  M.setup({ mode = mode })
+  M.attach_to_buffer(M.current_buffer())
   M.highlight_lsp_content(M.current_buffer())
-end, { range = true })
+end, {
+  nargs = 1,
+  complete = function(_, _, _)
+    -- Return list of completion options
+    return {
+      "above_kind",
+      "above_icon_and_name",
+      "inline_icon_and_name",
+      "inline_icon",
+      "inline_name",
+      "inline_kind",
+      "highlight_only",
+    }
+  end,
+})
 
 vim.api.nvim_create_user_command("FlaresClear", function()
-  M.setup()
+  M.setup_namespaces()
   M.clear_all(M.current_buffer())
+  M.clear_autocommands()
 end, { range = true })
 
 return M
