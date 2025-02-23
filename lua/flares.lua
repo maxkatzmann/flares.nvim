@@ -199,7 +199,7 @@ local display_text_for_kind = {
   [6] = "Method",
 }
 
-local display_handlers = {
+local flare_addition_handlers = {
   above_kind = function(bufnr, line, _, kind)
     M.add_line_above_flare(bufnr, line + 1, display_text_for_kind[kind], "FlaresComment")
   end,
@@ -263,7 +263,7 @@ M.add_flares = function(bufnr)
 
   local lsp_content = M.get_document_symbols(bufnr)
 
-  local handler = display_handlers[M.mode]
+  local handler = flare_addition_handlers[M.mode]
   if not handler then
     error("[Flares] Invalid display mode: " .. tostring(M.mode))
     return
@@ -278,6 +278,9 @@ M.add_flares = function(bufnr)
     -- Add the new highlight/text
     handler(bufnr, symbol.range.start.line, symbol.name, symbol.kind)
   end
+
+  -- Clear until the end of the buffer
+  M.clear_all_flares_in_lines(bufnr, last_line + 1)
 end
 
 local timer = nil -- Store timer reference
