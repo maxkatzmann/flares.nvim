@@ -53,12 +53,9 @@ end
 
 M.setup = function(opts)
   if is_setup then
-    print("[Flares] Already setup")
     return
   end
   is_setup = true
-
-  print("[Flares] Setting up")
 
   opts = opts or {}
 
@@ -73,13 +70,9 @@ M.setup = function(opts)
     group = group,
     callback = function(args)
       local bufnr = args.buf
-      print("[Flares] LSP attached to buffer", bufnr)
       -- Check if the attached LSP provides symbols
       if has_symbol_clients(bufnr) then
-        print("[Flares] Flares lighted in buffer")
         M.attach_to_buffer(bufnr)
-      else
-        print("[Flares] LSP does not provide symbols")
       end
     end,
   })
@@ -155,15 +148,21 @@ M.get_document_symbols = function(bufnr)
     [6] = true, -- Method
   }
 
+  local function traverse_symbols(symbol_list)
+    for _, symbol in ipairs(symbol_list) do
+      if wanted_kinds[symbol.kind] then
+        table.insert(symbols, symbol)
+      end
+      if symbol.children then
+        traverse_symbols(symbol.children)
+      end
+    end
+  end
+
   if result and next(result) then
     for _, res in pairs(result) do
       if res.result then
-        for _, symbol in ipairs(res.result) do
-          -- Only insert symbols of the desired kinds
-          if wanted_kinds[symbol.kind] then
-            table.insert(symbols, symbol)
-          end
-        end
+        traverse_symbols(res.result)
       end
     end
   end
@@ -263,8 +262,6 @@ M.highlight_lsp_content = function(bufnr)
   M.clear_all(bufnr)
 
   local lsp_content = M.get_document_symbols(bufnr)
-
-  print("[Flares] Highlighting LSP content: " .. #lsp_content .. " symbols")
 
   local handler = display_handlers[M.mode]
   if not handler then
