@@ -200,11 +200,36 @@ local function add_line_above_flare(bufnr, linenr, content, highlight_group)
   })
 end
 
+--- Get the leading whitespace substring from a line in a buffer
+---@param bufnr number: The buffer number
+---@param linenr number: The line number (0-based)
+---@return string: The leading whitespace substring
+local function get_leading_whitespace(bufnr, linenr)
+  local line = vim.api.nvim_buf_get_lines(bufnr, linenr, linenr + 1, false)[1]
+  if not line then
+    return ""
+  end
+
+  -- Find the first non-whitespace character
+  local first_non_ws = line:find("[^%s]")
+  if not first_non_ws then
+    return ""
+  end
+
+  -- Return the substring from start to before first non-whitespace
+  return line:sub(1, first_non_ws - 1)
+end
+
 --- Get the display string for a symbol.
+---@param bufnr number: The buffer number.
 ---@param symbol unknown: The LSP symbol to get the display string for.
 ---@return string: The display string.
-local function get_flare_display_string_for_symbol(symbol)
+local function get_flare_display_string_for_symbol(bufnr, symbol)
   local result = ""
+
+  if M.mode == "above" and M.align_above then
+    result = result .. get_leading_whitespace(bufnr, symbol.range.start.line)
+  end
 
   for _, entry in ipairs(M.display_contents) do
     if entry == "icon" then
@@ -232,6 +257,7 @@ local function add_flares(bufnr)
 
   -- Gather the LSP symbols for which we want to add flares.
   local lsp_symbols = get_document_symbols(bufnr)
+
   -- We clear previously added flares while adding new ones.
   -- To that end, we keep track of the position at which we
   -- last added a new flare and then clear all the ones between
@@ -242,7 +268,7 @@ local function add_flares(bufnr)
     -- Where to add the flare:
     local line = symbol.range.start.line
     -- What to display for that flare:
-    local display_string = get_flare_display_string_for_symbol(symbol)
+    local display_string = get_flare_display_string_for_symbol(bufnr, symbol)
 
     -- Clear the old flares between the last one added and the new one we want to add.
     clear_flares_in_lines(bufnr, last_line + 1, symbol.range.start.line + 1)
@@ -362,6 +388,8 @@ M.setup = function(opts)
   M.mode = opts.mode or "inline"
 
   M.display_contents = opts.display_contents or { "icon", "kind", "name" }
+
+  M.align_above = true
 
   M.icon_for_kind = {
     [5] = opts.icons and opts.icons.Class or "",
