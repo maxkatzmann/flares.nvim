@@ -96,12 +96,21 @@ local function get_document_symbols(bufnr)
   local params = { textDocument = vim.lsp.util.make_text_document_params() }
   local result = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol", params, 500)
 
-  -- Define the kinds we want to add flares for
+  -- Define the kinds we want to add flares for.
   local wanted_kinds = {
     [5] = true, -- Class
-    [12] = true, -- Function
-    [6] = true, -- Method
   }
+  -- Functions/Methods are declared in a separate table to allow for
+  -- checking for nested functions.
+  local function_kinds = {
+    [6] = true, -- Method
+    [12] = true, -- Function
+  }
+
+  -- Merge function_kinds into wanted_kinds
+  for k, v in pairs(function_kinds) do
+    wanted_kinds[k] = v
+  end
 
   -- Collect the symbols we want to add flares to
   local symbols = {}
@@ -112,7 +121,7 @@ local function get_document_symbols(bufnr)
       if wanted_kinds[symbol.kind] then
         table.insert(symbols, symbol)
       end
-      if symbol.children then
+      if symbol.children and (M.include_nested_functions or not function_kinds[symbol.kind]) then
         traverse_symbols(symbol.children)
       end
     end
@@ -390,6 +399,8 @@ M.setup = function(opts)
   M.display_contents = opts.display_contents or { "icon", "kind", "name" }
 
   M.align_above = true
+
+  M.include_nested_functions = opts.include_nested_functions or false
 
   M.icon_for_kind = {
     [5] = opts.icons and opts.icons.Class or "",
