@@ -196,6 +196,13 @@ end
 ---@param content string: The text to display.
 ---@param highlight_group string: The highlight group to use.
 local function add_line_above_flare(bufnr, linenr, content, highlight_group)
+  -- Following issues where `nvim_buf_set_extmark` got `line` values that
+  -- were out of range, we check if the line number is valid before adding
+  -- the virtual line.
+  if linenr <= 0 then
+    return
+  end
+
   local win_width = vim.api.nvim_win_get_width(0)
   local padded_text = content .. string.rep(" ", win_width - vim.fn.strdisplaywidth(content))
 
