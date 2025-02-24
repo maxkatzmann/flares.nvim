@@ -39,11 +39,13 @@ end
 -- TODO: Make highlight groups configurable.
 local function register_highlight_groups()
   local colors = get_normal_colors()
-  local blended_bg = blend_hex_colors(colors.bg, colors.fg, 0.033)
-  local blended_fg = blend_hex_colors(colors.bg, colors.fg, 0.2)
+  local blended_content_bg = blend_hex_colors(colors.bg, colors.fg, 0.02)
+  local blended_header_bg = blend_hex_colors(colors.bg, colors.fg, 0.033)
+  local blended_header_fg = blend_hex_colors(colors.bg, colors.fg, 0.2)
 
-  vim.api.nvim_set_hl(0, "FlaresBackground", { bg = blended_bg })
-  vim.api.nvim_set_hl(0, "FlaresComment", { bg = blended_bg, fg = blended_fg })
+  vim.api.nvim_set_hl(0, "FlaresContentBackground", { bg = blended_content_bg })
+  vim.api.nvim_set_hl(0, "FlaresHeaderBackground", { bg = blended_header_bg })
+  vim.api.nvim_set_hl(0, "FlaresHeaderForeground", { bg = blended_header_bg, fg = blended_header_fg })
 end
 
 -- ######## DEBOUNCING ########
@@ -222,7 +224,7 @@ end
 
 local function add_function_background(bufnr, start_line, end_line)
   for i = start_line, end_line do
-    add_highlight_flare(bufnr, i, "FlaresBackground")
+    add_highlight_flare(bufnr, i, "FlaresContentBackground")
   end
 end
 
@@ -284,6 +286,8 @@ local function add_flares(bufnr)
   -- Gather the LSP symbols for which we want to add flares.
   local lsp_symbols = get_document_symbols(bufnr)
 
+  print(vim.inspect(lsp_symbols))
+
   -- We clear previously added flares while adding new ones.
   -- To that end, we keep track of the position at which we
   -- last added a new flare and then clear all the ones between
@@ -312,10 +316,10 @@ local function add_flares(bufnr)
     if M.mode == "inline" then
       -- When displaying the flare inline, we first add the background highlight
       -- to the corresponding line and then add the virtual text.
-      add_highlight_flare(bufnr, start_line, "FlaresBackground")
-      add_text_flare(bufnr, start_line, display_string, "FlaresComment")
+      add_highlight_flare(bufnr, start_line, "FlaresHeaderBackground")
+      add_text_flare(bufnr, start_line, display_string, "FlaresHeaderForeground")
     elseif M.mode == "above" then
-      add_line_above_flare(bufnr, start_line + 1, display_string, "FlaresComment")
+      add_line_above_flare(bufnr, start_line + 1, display_string, "FlaresHeaderForeground")
     end
   end
 
