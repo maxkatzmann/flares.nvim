@@ -93,7 +93,7 @@ end
 ---@param bufnr number: The buffer number.
 ---@return table: A table of symbols.
 local function get_document_symbols(bufnr)
-  local params = { textDocument = vim.lsp.util.make_text_document_params() }
+  local params = { textDocument = vim.lsp.util.make_text_document_params(bufnr) }
   local result = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol", params, 500)
 
   -- Define the kinds we want to add flares for.
