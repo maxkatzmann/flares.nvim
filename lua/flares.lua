@@ -286,8 +286,6 @@ local function add_flares(bufnr)
   -- Gather the LSP symbols for which we want to add flares.
   local lsp_symbols = get_document_symbols(bufnr)
 
-  print(vim.inspect(lsp_symbols))
-
   -- We clear previously added flares while adding new ones.
   -- To that end, we keep track of the position at which we
   -- last added a new flare and then clear all the ones between
