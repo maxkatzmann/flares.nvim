@@ -89,6 +89,26 @@ local function has_symbol_clients(bufnr)
   return false
 end
 
+local symbol_kinds = {
+  [5] = { name = "Class", wanted = true, is_function = false },
+  [6] = { name = "Method", wanted = true, is_function = true },
+  [12] = { name = "Function", wanted = true, is_function = true },
+}
+
+--- Check if a symbol kind should have a flare
+---@param symbol unknown: The LSP symbol
+---@return boolean: Whether this kind should have a flare
+local function symbol_with_flare(symbol)
+  return symbol_kinds[symbol.kind] and symbol_kinds[symbol.kind].wanted
+end
+
+--- Check if a symbol represents a function-like construct
+---@param symbol unknown: The LSP symbol
+---@return boolean: Whether this kind represents a function
+local function symbol_is_function(symbol)
+  return symbol_kinds[symbol.kind] and symbol_kinds[symbol.kind].is_function
+end
+
 --- Get document symbols from the LSP for a given buffer.
 ---@param bufnr number: The buffer number.
 ---@return table: A table of symbols.
@@ -96,32 +116,16 @@ local function get_document_symbols(bufnr)
   local params = { textDocument = vim.lsp.util.make_text_document_params(bufnr) }
   local result = vim.lsp.buf_request_sync(bufnr, "textDocument/documentSymbol", params, 500)
 
-  -- Define the kinds we want to add flares for.
-  local wanted_kinds = {
-    [5] = true, -- Class
-  }
-  -- Functions/Methods are declared in a separate table to allow for
-  -- checking for nested functions.
-  local function_kinds = {
-    [6] = true, -- Method
-    [12] = true, -- Function
-  }
-
-  -- Merge function_kinds into wanted_kinds
-  for k, v in pairs(function_kinds) do
-    wanted_kinds[k] = v
-  end
-
   -- Collect the symbols we want to add flares to
   local symbols = {}
 
   -- Recursively traverse the symbol tree
   local function traverse_symbols(symbol_list)
     for _, symbol in ipairs(symbol_list) do
-      if wanted_kinds[symbol.kind] then
+      if symbol_with_flare(symbol) then
         table.insert(symbols, symbol)
       end
-      if symbol.children and (M.include_nested_functions or not function_kinds[symbol.kind]) then
+      if symbol.children and (M.include_nested_functions or not symbol_is_function(symbol)) then
         traverse_symbols(symbol.children)
       end
     end
@@ -216,6 +220,12 @@ local function add_line_above_flare(bufnr, linenr, content, highlight_group)
   })
 end
 
+local function add_function_background(bufnr, start_line, end_line)
+  for i = start_line, end_line do
+    add_highlight_flare(bufnr, i, "FlaresBackground")
+  end
+end
+
 --- Get the leading whitespace substring from a line in a buffer
 ---@param bufnr number: The buffer number
 ---@param linenr number: The line number (0-based)
@@ -282,23 +292,31 @@ local function add_flares(bufnr)
 
   for _, symbol in ipairs(lsp_symbols) do
     -- Where to add the flare:
-    local line = symbol.range.start.line
+    local start_line = symbol.range.start.line
+    local end_line = symbol.range["end"].line
     -- What to display for that flare:
     local display_string = get_flare_display_string_for_symbol(bufnr, symbol)
 
     -- Clear the old flares between the last one added and the new one we want to add.
     clear_flares_in_lines(bufnr, last_line + 1, symbol.range.start.line + 1)
 
+    -- Update the last line to the line of the current symbol.
+    last_line = start_line
+
+    -- Draw the background for functions and methods, if enabled.
+    if M.function_background and symbol_is_function(symbol) then
+      add_function_background(bufnr, start_line, end_line)
+      last_line = end_line
+    end
+
     if M.mode == "inline" then
       -- When displaying the flare inline, we first add the background highlight
       -- to the corresponding line and then add the virtual text.
-      add_highlight_flare(bufnr, line, "FlaresBackground")
-      add_text_flare(bufnr, line, display_string, "FlaresComment")
+      add_highlight_flare(bufnr, start_line, "FlaresBackground")
+      add_text_flare(bufnr, start_line, display_string, "FlaresComment")
     elseif M.mode == "above" then
-      add_line_above_flare(bufnr, line + 1, display_string, "FlaresComment")
+      add_line_above_flare(bufnr, start_line + 1, display_string, "FlaresComment")
     end
-
-    last_line = symbol.range.start.line
   end
 
   -- Clear all the remaining flares in the buffer.
@@ -408,6 +426,8 @@ M.setup = function(opts)
   M.align_above = true
 
   M.include_nested_functions = opts.include_nested_functions or false
+
+  M.function_background = opts.function_background or false
 
   M.icon_for_kind = {
     [5] = opts.icons and opts.icons.Class or "",
