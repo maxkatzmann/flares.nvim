@@ -109,9 +109,9 @@ end
 --- of a symbol, by looking at the `allow_nested` option.
 ---@param symbol unknown: The LSP symbol
 ---@return boolean: Whether we should consider the descendants of this symbol.
-local function symbol_allows_nesting(symbol)
+local function symbol_disallows_nesting(symbol)
   local kind = symbol_kinds[symbol.kind]
-  return vim.tbl_contains(M.allow_nested, kind)
+  return vim.tbl_contains(M.disallow_nesting, kind)
 end
 
 --- Check if a symbol should have a background, by looking
@@ -139,7 +139,7 @@ local function get_document_symbols(bufnr)
       if symbol_with_flare(symbol) then
         table.insert(symbols, symbol)
       end
-      if symbol.children and symbol_allows_nesting(symbol) then
+      if symbol.children and not symbol_disallows_nesting(symbol) then
         traverse_symbols(symbol.children)
       end
     end
@@ -441,7 +441,7 @@ M.setup = function(opts)
 
   M.align_above = true
 
-  M.allow_nested = opts.allow_nested or { "Class" }
+  M.disallow_nesting = opts.disallow_nesting or {}
 
   M.has_background = opts.has_background or {}
 
