@@ -92,23 +92,34 @@ local function has_symbol_clients(bufnr)
 end
 
 local symbol_kinds = {
-  [5] = { name = "Class", wanted = true, is_function = false },
-  [6] = { name = "Method", wanted = true, is_function = true },
-  [12] = { name = "Function", wanted = true, is_function = true },
+  [5] = "Class",
+  [6] = "Method",
+  [12] = "Function",
 }
 
 --- Check if a symbol kind should have a flare
 ---@param symbol unknown: The LSP symbol
 ---@return boolean: Whether this kind should have a flare
 local function symbol_with_flare(symbol)
-  return symbol_kinds[symbol.kind] and symbol_kinds[symbol.kind].wanted
+  return symbol_kinds[symbol.kind]
 end
 
---- Check if a symbol represents a function-like construct
+--- Check if we should consider adding flares for the descendants
+--- of a symbol, by looking at the `allow_nested` option.
 ---@param symbol unknown: The LSP symbol
----@return boolean: Whether this kind represents a function
-local function symbol_is_function(symbol)
-  return symbol_kinds[symbol.kind] and symbol_kinds[symbol.kind].is_function
+---@return boolean: Whether we should consider the descendants of this symbol.
+local function symbol_allows_nesting(symbol)
+  local kind = symbol_kinds[symbol.kind]
+  return vim.tbl_contains(M.allow_nested, kind)
+end
+
+--- Check if a symbol should have a background, by looking
+--- at the `has_background` option.
+---@param symbol unknown: The LSP symbol
+---@return boolean: Whether this kind should have a background
+local function symbol_has_background(symbol)
+  local kind = symbol_kinds[symbol.kind]
+  return vim.tbl_contains(M.has_background, kind)
 end
 
 --- Get document symbols from the LSP for a given buffer.
@@ -127,7 +138,7 @@ local function get_document_symbols(bufnr)
       if symbol_with_flare(symbol) then
         table.insert(symbols, symbol)
       end
-      if symbol.children and (M.include_nested_functions or not symbol_is_function(symbol)) then
+      if symbol.children and symbol_allows_nesting(symbol) then
         traverse_symbols(symbol.children)
       end
     end
@@ -222,7 +233,7 @@ local function add_line_above_flare(bufnr, linenr, content, highlight_group)
   })
 end
 
-local function add_function_background(bufnr, start_line, end_line)
+local function add_background(bufnr, start_line, end_line)
   for i = start_line, end_line do
     add_highlight_flare(bufnr, i, "FlaresContentBackground")
   end
@@ -300,15 +311,17 @@ local function add_flares(bufnr)
     local display_string = get_flare_display_string_for_symbol(bufnr, symbol)
 
     -- Clear the old flares between the last one added and the new one we want to add.
-    clear_flares_in_lines(bufnr, last_line + 1, symbol.range.start.line + 1)
+    if last_line <= start_line then
+      clear_flares_in_lines(bufnr, last_line + 1, start_line + 1)
+    end
 
     -- Update the last line to the line of the current symbol.
-    last_line = start_line
+    last_line = math.max(start_line, last_line)
 
     -- Draw the background for functions and methods, if enabled.
-    if M.function_background and symbol_is_function(symbol) then
-      add_function_background(bufnr, start_line, end_line)
-      last_line = end_line
+    if symbol_has_background(symbol) then
+      add_background(bufnr, start_line, end_line)
+      last_line = math.max(end_line, last_line)
     end
 
     if M.mode == "inline" then
@@ -427,9 +440,9 @@ M.setup = function(opts)
 
   M.align_above = true
 
-  M.include_nested_functions = opts.include_nested_functions or false
+  M.allow_nested = opts.allow_nested or { "Class" }
 
-  M.function_background = opts.function_background or false
+  M.has_background = opts.has_background or {}
 
   M.icon_for_kind = {
     [5] = opts.icons and opts.icons.Class or "",
