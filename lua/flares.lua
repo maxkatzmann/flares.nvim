@@ -94,6 +94,7 @@ end
 local symbol_kinds = {
   [5] = "Class",
   [6] = "Method",
+  [9] = "Constructor",
   [12] = "Function",
 }
 
@@ -274,7 +275,7 @@ local function get_flare_display_string_for_symbol(bufnr, symbol)
     if entry == "icon" then
       result = result .. M.icon_for_kind[symbol.kind] .. " "
     elseif entry == "kind" then
-      result = result .. M.display_text_for_kind[symbol.kind] .. " "
+      result = result .. symbol_kinds[symbol.kind] .. " "
     elseif entry == "name" then
       result = result .. symbol.name .. " "
     else
@@ -447,13 +448,8 @@ M.setup = function(opts)
   M.icon_for_kind = {
     [5] = opts.icons and opts.icons.Class or "",
     [6] = opts.icons and opts.icons.Method or "",
+    [9] = opts.icons and opts.icons.Constructor or "",
     [12] = opts.icons and opts.icons.Function or "",
-  }
-
-  M.display_text_for_kind = {
-    [5] = "Class",
-    [6] = "Method",
-    [12] = "Function",
   }
 
   register_highlight_groups()
