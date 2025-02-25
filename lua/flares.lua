@@ -339,6 +339,63 @@ local function add_flares(bufnr)
   clear_flares_in_lines(bufnr, last_line + 1)
 end
 
+-- ######## FLARE HIDING ########
+-- We want to hide flares in the current line when the cursor moves.
+
+-- Storing temporarily hidden flares
+local hidden_flares = {}
+
+--- Store flares from a specific line and remove them from display
+---@param bufnr number: The buffer number
+---@param line number: The line number
+local function hide_flares_in_line(bufnr, line)
+  -- Get all extmarks in the line
+  local marks = vim.api.nvim_buf_get_extmarks(bufnr, flares_ns, { line, 0 }, { line, -1 }, { details = true })
+
+  -- Store the marks and their details
+  for _, mark in ipairs(marks) do
+    local id, _, _, opts = unpack(mark)
+
+    -- Only handle marks that are not virt_lines_above. The
+    -- cursor is never in those lines anyway.
+    if not opts.virt_lines_above then
+      if not hidden_flares[line] then
+        hidden_flares[line] = {}
+      end
+
+      table.insert(hidden_flares[line], {
+        id = id,
+        virt_text = opts.virt_text,
+        virt_text_pos = opts.virt_text_pos,
+        line_hl_group = opts.line_hl_group,
+        virt_lines = opts.virt_lines,
+        priority = opts.priority,
+      })
+
+      -- Remove just this specific mark instead of clearing the whole line
+      vim.api.nvim_buf_del_extmark(bufnr, flares_ns, id)
+    end
+  end
+end
+
+--- Restore previously hidden flares for a specific line
+---@param bufnr number: The buffer number
+---@param line number: The line number
+local function restore_flares_in_line(bufnr, line)
+  local marks = hidden_flares[line]
+  if not marks then
+    return
+  end
+
+  -- Restore each mark with its original options
+  for _, opts in ipairs(marks) do
+    vim.api.nvim_buf_set_extmark(bufnr, flares_ns, line, 0, opts)
+  end
+
+  -- Clear the stored marks
+  hidden_flares[line] = nil
+end
+
 -- ######## SETUP ########
 
 --- Setup update events for a buffer. We want to re-draw flares
@@ -383,6 +440,31 @@ local function setup_update_events(bufnr)
       debounced_update(function()
         add_flares(bufnr)
       end, 500)
+    end,
+  })
+
+  -- Add cursor movement tracking to allow for hiding flares in the cursorline.
+  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      -- Nothing to do if cursorline is not enabled.
+      if not vim.opt.cursorline:get() then
+        return
+      end
+
+      local cursor = vim.api.nvim_win_get_cursor(0)
+      local current_line = cursor[1] - 1 -- Convert to 0-based
+
+      -- Restore flares in previously hidden lines
+      for line, _ in pairs(hidden_flares) do
+        if line ~= current_line then
+          restore_flares_in_line(bufnr, line)
+        end
+      end
+
+      -- Hide flares in current line
+      hide_flares_in_line(bufnr, current_line)
     end,
   })
 end
