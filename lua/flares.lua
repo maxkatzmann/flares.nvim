@@ -41,7 +41,7 @@ local function register_highlight_groups()
   local colors = get_normal_colors()
   local blended_content_bg = blend_hex_colors(colors.bg, colors.fg, 0.02)
   local blended_header_bg = blend_hex_colors(colors.bg, colors.fg, 0.033)
-  local blended_header_fg = blend_hex_colors(colors.bg, colors.fg, 0.2)
+  local blended_header_fg = blend_hex_colors(colors.bg, colors.fg, 0.3)
 
   vim.api.nvim_set_hl(0, "FlaresContentBackground", { bg = blended_content_bg })
   vim.api.nvim_set_hl(0, "FlaresHeaderBackground", { bg = blended_header_bg })
