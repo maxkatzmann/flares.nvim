@@ -352,6 +352,11 @@ local function hide_flares_in_line(bufnr, line)
   -- Get all extmarks in the line
   local marks = vim.api.nvim_buf_get_extmarks(bufnr, flares_ns, { line, 0 }, { line, -1 }, { details = true })
 
+  -- Initialize buffer table if it doesn't exist
+  if not hidden_flares[bufnr] then
+    hidden_flares[bufnr] = {}
+  end
+
   -- Store the marks and their details
   for _, mark in ipairs(marks) do
     local id, _, _, opts = unpack(mark)
@@ -359,11 +364,11 @@ local function hide_flares_in_line(bufnr, line)
     -- Only handle marks that are not virt_lines_above. The
     -- cursor is never in those lines anyway.
     if not opts.virt_lines_above then
-      if not hidden_flares[line] then
-        hidden_flares[line] = {}
+      if not hidden_flares[bufnr][line] then
+        hidden_flares[bufnr][line] = {}
       end
 
-      table.insert(hidden_flares[line], {
+      table.insert(hidden_flares[bufnr][line], {
         id = id,
         virt_text = opts.virt_text,
         virt_text_pos = opts.virt_text_pos,
@@ -382,18 +387,25 @@ end
 ---@param bufnr number: The buffer number
 ---@param line number: The line number
 local function restore_flares_in_line(bufnr, line)
-  local marks = hidden_flares[line]
-  if not marks then
+  if not hidden_flares[bufnr] or not hidden_flares[bufnr][line] then
+    return
+  end
+
+  -- Check if the line exists in the buffer
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  if line >= line_count then
+    -- Line no longer exists, just clear the stored marks
+    hidden_flares[bufnr][line] = nil
     return
   end
 
   -- Restore each mark with its original options
-  for _, opts in ipairs(marks) do
+  for _, opts in ipairs(hidden_flares[bufnr][line]) do
     vim.api.nvim_buf_set_extmark(bufnr, flares_ns, line, 0, opts)
   end
 
   -- Clear the stored marks
-  hidden_flares[line] = nil
+  hidden_flares[bufnr][line] = nil
 end
 
 -- ######## SETUP ########
@@ -455,16 +467,24 @@ local function setup_update_events(bufnr)
 
       local cursor = vim.api.nvim_win_get_cursor(0)
       local current_line = cursor[1] - 1 -- Convert to 0-based
+      local current_buf = vim.api.nvim_get_current_buf()
+
+      -- Initialize buffer table if it doesn't exist yet
+      if not hidden_flares[current_buf] then
+        hidden_flares[current_buf] = {}
+      end
 
       -- Restore flares in previously hidden lines
-      for line, _ in pairs(hidden_flares) do
-        if line ~= current_line then
-          restore_flares_in_line(bufnr, line)
+      if hidden_flares[current_buf] then
+        for line, _ in pairs(hidden_flares[current_buf]) do
+          if line ~= current_line then
+            restore_flares_in_line(current_buf, line)
+          end
         end
       end
 
       -- Hide flares in current line
-      hide_flares_in_line(bufnr, current_line)
+      hide_flares_in_line(current_buf, current_line)
     end,
   })
 end
