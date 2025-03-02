@@ -4,7 +4,9 @@ local M = {}
 
 -- Whether the plugin has been set up
 local is_setup = false
--- The namespace for keeping track of flares
+-- The namespaces for keeping track of flares
+-- We handle normal flares and background flares separately,
+-- in order to be able to redraw them independently.
 local flares_ns = vim.api.nvim_create_namespace("flares_nvim")
 local flares_background_ns = vim.api.nvim_create_namespace("flares_background_nvim")
 
@@ -95,12 +97,13 @@ local function has_symbol_clients(bufnr)
   return false
 end
 
+-- These are the kinds of symbols we want to add flares to.
 local symbol_kinds = {
   [5] = "Class",
   [6] = "Method",
   [9] = "Constructor",
   [12] = "Function",
-  [999] = "Comment", -- New custom kind for comments
+  [999] = "Comment", -- Custom kind for tracking comments
 }
 
 --- Get all symbol kind names as an array
@@ -150,8 +153,9 @@ end
 local function get_comment_symbols(bufnr)
   local comment_symbols = {}
 
-  -- If M.comment_flare is nil or empty, we can return the empty comment_symbols
-  if not M.comment_flare or #M.comment_flare == 0 then
+  -- If M.comment_flares is nil or empty, we can return
+  -- the empty comment_symbols right away.
+  if not M.comment_flares or #M.comment_flares == 0 then
     return comment_symbols
   end
 
@@ -182,7 +186,7 @@ local function get_comment_symbols(bufnr)
   local pattern = "^%s*" .. vim.pesc(comment_prefix) .. "%s*(.+)"
 
   -- Comment flare prefixes to match (if nil or empty, match all comments)
-  local comment_flares = M.comment_flare or {}
+  local comment_flares = M.comment_flares or {}
 
   for i, line in ipairs(lines) do
     local comment_text = line:match(pattern)
@@ -220,7 +224,7 @@ local function get_comment_symbols(bufnr)
   return comment_symbols
 end
 
---- Get document symbols from the LSP for a given buffer.
+--- Get document symbols from the LSP (and for comments) for a given buffer.
 ---@param bufnr number: The buffer number.
 ---@return table: A table of symbols.
 local function get_document_symbols(bufnr)
@@ -266,48 +270,57 @@ end
 
 -- Section: Flare Clearing
 
---- Clear text flares in a range of lines.
+--- Clear flares in a range of lines.
 ---@param bufnr number: The buffer number.
 ---@param start_line number|nil: The starting line number.
 ---@param end_line number|nil: The ending line number.
+---@param namespace number|nil: The namespace for which to clear flares.
 local function clear_flares_in_lines(bufnr, start_line, end_line, namespace)
+  -- Default to clearing flares in the main namespace.
   namespace = namespace or flares_ns
   vim.api.nvim_buf_clear_namespace(bufnr, namespace, start_line or 0, end_line or -1)
-
-  if namespace == flares_ns then
-    local pattern = "FlaresNvim" .. flares_ns .. "_"
-    local highlights = vim.fn.getcompletion(pattern, "highlight")
-    for _, hl_group in ipairs(highlights) do
-      pcall(vim.api.nvim_del_hl, 0, hl_group)
-    end
-  end
 end
 
 --- Clear all flares in a buffer.
 ---@param bufnr number: The buffer number.
 local function clear_all_flares(bufnr)
   clear_flares_in_lines(bufnr)
+  clear_flares_in_lines(bufnr, nil, nil, flares_background_ns)
 end
 
 -- Section: Flare Addition
 
---- Add a text flare to a buffer.
+--- Add a flare to a buffer, at the end of the passed line.
 ---@param bufnr number: The buffer number.
 ---@param linenr number: The line number in which to add the flare.
 ---@param content string: The text to display.
----@param highlight_group string: The highlight group to use.
----@return number: The extmark ID.
-local function add_text_flare(bufnr, linenr, content, highlight_group)
-  local extmark_opts = {
-    virt_text = { { content, highlight_group } },
-    virt_text_pos = "right_align",
-    priority = 1,
-  }
+---@param title_highlight_group string: The highlight group to use for the displayed content.
+---@param background_highlight_group string | nil: The highlight group to use for the background of the line.
+local function add_inline_flare(bufnr, linenr, content, title_highlight_group, background_highlight_group)
+  -- Draw a background highlight for the line.
+  -- Note that this is specifically not drawn in the
+  -- background namespace, since this background should be
+  -- cleared together with the flare.
+  if background_highlight_group then
+    vim.api.nvim_buf_set_extmark(bufnr, flares_ns, linenr, 0, {
+      line_hl_group = background_highlight_group,
+      -- We use a slightly higher priority for this background than for
+      -- the typical background flare so that this one gets drawn over
+      -- the other one.
+      priority = 2,
+    })
+  end
 
-  return vim.api.nvim_buf_set_extmark(bufnr, flares_ns, linenr, 0, extmark_opts)
+  -- Draw the content overlay inline
+  local extmark_opts = {
+    virt_text = { { content, title_highlight_group } },
+    virt_text_pos = "right_align",
+  }
+  vim.api.nvim_buf_set_extmark(bufnr, flares_ns, linenr, 0, extmark_opts)
 end
 
---- Add a text flare to a buffer.
+--- Add a comment flare to a buffer, overlaying the comment and
+--- adding an empty virtual line above and below.
 ---@param bufnr number: The buffer number.
 ---@param linenr number: The line number in which to add the flare.
 ---@param content string: The text to display.
@@ -316,9 +329,9 @@ local function add_comment_flare(bufnr, linenr, content, highlight_group)
   local win_width = vim.api.nvim_win_get_width(0)
   local padded_text = content .. string.rep(" ", win_width - vim.fn.strdisplaywidth(content))
 
+  -- Virtual empty line above the comment
   local above_extmark_opts = {
     virt_text_pos = "overlay",
-    priority = 1,
     virt_lines = {
       {
         { string.rep(" ", win_width), highlight_group },
@@ -328,17 +341,17 @@ local function add_comment_flare(bufnr, linenr, content, highlight_group)
   }
   vim.api.nvim_buf_set_extmark(bufnr, flares_ns, linenr, 0, above_extmark_opts)
 
+  -- Overlay for the comment
   local extmark_opts = {
     virt_text = { { padded_text, highlight_group } },
     virt_text_pos = "overlay",
-    priority = 1,
   }
 
   vim.api.nvim_buf_set_extmark(bufnr, flares_ns, linenr, 0, extmark_opts)
 
+  -- Virtual empty line below the comment
   local below_extmark_opts = {
     virt_text_pos = "overlay",
-    priority = 1,
     virt_lines = {
       {
         { string.rep(" ", win_width), highlight_group },
@@ -346,18 +359,6 @@ local function add_comment_flare(bufnr, linenr, content, highlight_group)
     },
   }
   vim.api.nvim_buf_set_extmark(bufnr, flares_ns, linenr, 0, below_extmark_opts)
-end
-
---- Add a highlight flare to a buffer.
----@param bufnr number: The buffer number.
----@param linenr number: The line number at which to add the flare.
----@param highlight_group string: The highlight group to use.
----@return number: The extmark ID.
-local function add_highlight_flare(bufnr, linenr, highlight_group)
-  return vim.api.nvim_buf_set_extmark(bufnr, flares_ns, linenr, 0, {
-    line_hl_group = highlight_group,
-    priority = 1,
-  })
 end
 
 --- Add a line above flare to a buffer.
@@ -386,6 +387,10 @@ local function add_line_above_flare(bufnr, linenr, content, highlight_group)
   })
 end
 
+--- Add a background to a range of lines in a buffer.
+---@param bufnr number: The buffer number
+---@param start_line number: The start line
+---@param end_line number: The end line
 local function add_background(bufnr, start_line, end_line)
   for i = start_line, end_line do
     vim.api.nvim_buf_set_extmark(bufnr, flares_background_ns, i, 0, {
@@ -445,7 +450,7 @@ local function get_flare_display_string_for_symbol(bufnr, symbol)
   return result
 end
 
---- Add flares to a buffer based on LSP document symbols.
+--- Add flares to a buffer based on LSP (and comment) document symbols.
 ---@param bufnr number: The buffer number.
 local function add_flares(bufnr)
   -- Check whether we have a valid mode for displaying flares.
@@ -503,8 +508,7 @@ local function add_flares(bufnr)
       if M.mode == "inline" then
         -- When displaying the flare inline, we first add the background highlight
         -- to the corresponding line and then add the virtual text.
-        add_highlight_flare(bufnr, start_line, "FlaresHeaderBackground")
-        add_text_flare(bufnr, start_line, display_string, "FlaresHeader")
+        add_inline_flare(bufnr, start_line, display_string, "FlaresHeader", "FlaresHeaderBackground")
       elseif M.mode == "above" then
         add_line_above_flare(bufnr, start_line + 1, display_string, "FlaresHeader")
       end
@@ -524,7 +528,8 @@ end
 -- Storing temporarily hidden flares
 local hidden_flares = {}
 
---- Store flares from a specific line and remove them from display
+--- Store flares from a specific line and remove them from
+--- display. Does so for all namespaces.
 ---@param bufnr number: The buffer number
 ---@param line number: The line number
 local function hide_flares_in_line(bufnr, line)
@@ -544,7 +549,6 @@ local function hide_flares_in_line(bufnr, line)
 
       -- Only handle marks that are not virt_lines_above. The
       -- cursor is never in those lines anyway.
-      print("Wanting to hide flare with opts", vim.inspect(opts))
       if not opts.virt_lines then
         if not hidden_flares[bufnr][line] then
           hidden_flares[bufnr][line] = {}
@@ -567,7 +571,8 @@ local function hide_flares_in_line(bufnr, line)
   end
 end
 
---- Restore previously hidden flares for a specific line
+--- Restore previously hidden flares for a specific line. Does
+--- so for all namespaces.
 ---@param bufnr number: The buffer number
 ---@param line number: The line number
 local function restore_flares_in_line(bufnr, line)
@@ -727,15 +732,9 @@ M.setup = function(opts)
   M.mode = opts.mode or "inline"
 
   M.enabled_flares = opts.enabled_flares or get_symbol_kind_names()
-
-  M.comment_flare = opts.comment_flare or { "Section:" }
-
   M.display_contents = opts.display_contents or { "icon", "kind", "name" }
-
   M.align_above = true
-
   M.disallow_nesting = opts.disallow_nesting or {}
-
   M.has_background = opts.has_background or {}
 
   M.icon_for_kind = {
@@ -745,6 +744,8 @@ M.setup = function(opts)
     [12] = opts.icons and opts.icons.Function or "",
     [999] = opts.icons and opts.icons.Comment or "󰆉",
   }
+
+  M.comment_flares = opts.comment_flares or {}
 
   register_highlight_groups()
   setup_initialization_events()
@@ -763,7 +764,7 @@ local function clear_autocommands()
   vim.api.nvim_clear_autocmds({ group = "FlareEventListeners" })
 end
 
--- Clear command before re-defining it.
+-- Clear user command before re-defining it.
 pcall(vim.api.nvim_del_user_command, "FlaresShow")
 
 vim.api.nvim_create_user_command("FlaresShow", function(opts)
@@ -814,7 +815,7 @@ end, {
   end,
 })
 
--- Clear command before re-defining it.
+-- Clear user command before re-defining it.
 pcall(vim.api.nvim_del_user_command, "FlaresHide")
 vim.api.nvim_create_user_command("FlaresHide", function()
   clear_all_flares(current_buffer())
