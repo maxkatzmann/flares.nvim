@@ -145,7 +145,7 @@ local function get_comment_symbols(bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
   -- Get comment string for the current filetype
-  local commentstring = vim.api.nvim_buf_get_option(bufnr, "commentstring")
+  local commentstring = vim.api.nvim_get_option_value("commentstring", { buf = bufnr })
   -- Extract just the comment prefix (without the format specifier)
   local comment_prefix = commentstring:match("(.*)%%s") or commentstring
   comment_prefix = vim.trim(comment_prefix)
@@ -153,10 +153,10 @@ local function get_comment_symbols(bufnr)
   -- If we can't determine a comment string, use some common defaults
   if comment_prefix == "" then
     -- Try to detect based on filetype
-    local ft = vim.api.nvim_buf_get_option(bufnr, "filetype")
+    local ft = vim.api.nvim_get_option_value("filetype", { buf = bufnr })
     if ft == "lua" then
       comment_prefix = "--"
-    elseif vim.tbl_contains({ "javascript", "typescript", "c", "cpp", "java" }, ft) then
+    elseif vim.tbl_contains({ "javascript", "typescript", "c", "cpp", "java", "scala" }, ft) then
       comment_prefix = "//"
     elseif ft == "python" then
       comment_prefix = "#"
