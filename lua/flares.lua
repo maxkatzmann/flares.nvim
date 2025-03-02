@@ -98,11 +98,23 @@ local symbol_kinds = {
   [12] = "Function",
 }
 
+--- Get all symbol kind names as an array
+---@return string[]: An array of symbol kind names
+local function get_symbol_kind_names()
+  local kinds = {}
+  for _, kind in pairs(symbol_kinds) do
+    if not vim.tbl_contains(kinds, kind) then
+      table.insert(kinds, kind)
+    end
+  end
+  return kinds
+end
+
 --- Check if a symbol kind should have a flare
 ---@param symbol unknown: The LSP symbol
 ---@return boolean: Whether this kind should have a flare
 local function symbol_with_flare(symbol)
-  return symbol_kinds[symbol.kind]
+  return symbol_kinds[symbol.kind] and vim.tbl_contains(M.enabled_flares, symbol_kinds[symbol.kind])
 end
 
 --- Check if we should consider adding flares for the descendants
@@ -538,6 +550,8 @@ M.setup = function(opts)
   opts = opts or {}
 
   M.mode = opts.mode or "inline"
+
+  M.enabled_flares = opts.enabled_flares or get_symbol_kind_names()
 
   M.display_contents = opts.display_contents or { "icon", "kind", "name" }
 
