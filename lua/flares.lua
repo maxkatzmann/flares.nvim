@@ -6,6 +6,7 @@ local M = {}
 local is_setup = false
 -- The namespace for keeping track of flares
 local flares_ns = vim.api.nvim_create_namespace("flares_nvim")
+local flares_background_ns = vim.api.nvim_create_namespace("flares_background_nvim")
 
 -- ######## COLORS ########
 
@@ -96,6 +97,7 @@ local symbol_kinds = {
   [6] = "Method",
   [9] = "Constructor",
   [12] = "Function",
+  [999] = "Comment", -- New custom kind for comments
 }
 
 --- Get all symbol kind names as an array
@@ -135,6 +137,55 @@ local function symbol_has_background(symbol)
   return vim.tbl_contains(M.has_background, kind)
 end
 
+-- Function to find comments in a buffer
+-- @param bufnr number: The buffer number
+-- @return table: Array of comment symbols in the same format as LSP symbols
+local function get_comment_symbols(bufnr)
+  local comment_symbols = {}
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+  -- Get comment string for the current filetype
+  local commentstring = vim.api.nvim_buf_get_option(bufnr, "commentstring")
+  -- Extract just the comment prefix (without the format specifier)
+  local comment_prefix = commentstring:match("(.*)%%s") or commentstring
+  comment_prefix = vim.trim(comment_prefix)
+
+  -- If we can't determine a comment string, use some common defaults
+  if comment_prefix == "" then
+    -- Try to detect based on filetype
+    local ft = vim.api.nvim_buf_get_option(bufnr, "filetype")
+    if ft == "lua" then
+      comment_prefix = "--"
+    elseif vim.tbl_contains({ "javascript", "typescript", "c", "cpp", "java" }, ft) then
+      comment_prefix = "//"
+    elseif ft == "python" then
+      comment_prefix = "#"
+    else
+      comment_prefix = "--" -- Default fallback
+    end
+  end
+
+  -- Pattern to match a comment at the beginning of a line (with optional whitespace)
+  local pattern = "^%s*" .. vim.pesc(comment_prefix) .. "%s*(.+)"
+
+  for i, line in ipairs(lines) do
+    local comment_text = line:match(pattern)
+    if comment_text then
+      -- Format the comment symbol like an LSP symbol
+      table.insert(comment_symbols, {
+        name = comment_text,
+        kind = 999, -- Our custom comment kind
+        range = {
+          start = { line = i - 1, character = 0 },
+          ["end"] = { line = i - 1, character = #line },
+        },
+      })
+    end
+  end
+
+  return comment_symbols
+end
+
 --- Get document symbols from the LSP for a given buffer.
 ---@param bufnr number: The buffer number.
 ---@return table: A table of symbols.
@@ -165,6 +216,17 @@ local function get_document_symbols(bufnr)
     end
   end
 
+  -- Add comment symbols to our list of symbols
+  local comment_symbols = get_comment_symbols(bufnr)
+  for _, comment in ipairs(comment_symbols) do
+    table.insert(symbols, comment)
+  end
+
+  -- Sort all symbols by start line for proper ordering
+  table.sort(symbols, function(a, b)
+    return a.range.start.line < b.range.start.line
+  end)
+
   return symbols
 end
 
@@ -174,13 +236,17 @@ end
 ---@param bufnr number: The buffer number.
 ---@param start_line number|nil: The starting line number.
 ---@param end_line number|nil: The ending line number.
-local function clear_flares_in_lines(bufnr, start_line, end_line)
-  vim.api.nvim_buf_clear_namespace(bufnr, flares_ns, start_line or 0, end_line or -1)
+local function clear_flares_in_lines(bufnr, start_line, end_line, namespace)
+  namespace = namespace or flares_ns
+  print("Clearing flares from " .. (start_line or 0) .. " to " .. (end_line or -1) .. " in namespace " .. namespace)
+  vim.api.nvim_buf_clear_namespace(bufnr, namespace, start_line or 0, end_line or -1)
 
-  local pattern = "FlaresNvim" .. flares_ns .. "_"
-  local highlights = vim.fn.getcompletion(pattern, "highlight")
-  for _, hl_group in ipairs(highlights) do
-    pcall(vim.api.nvim_del_hl, 0, hl_group)
+  if namespace == flares_ns then
+    local pattern = "FlaresNvim" .. flares_ns .. "_"
+    local highlights = vim.fn.getcompletion(pattern, "highlight")
+    for _, hl_group in ipairs(highlights) do
+      pcall(vim.api.nvim_del_hl, 0, hl_group)
+    end
   end
 end
 
@@ -248,7 +314,10 @@ end
 
 local function add_background(bufnr, start_line, end_line)
   for i = start_line, end_line do
-    add_highlight_flare(bufnr, i, "FlaresContentBackground")
+    vim.api.nvim_buf_set_extmark(bufnr, flares_background_ns, i, 0, {
+      line_hl_group = "FlaresContentBackground",
+      priority = 1,
+    })
   end
 end
 
@@ -310,11 +379,16 @@ local function add_flares(bufnr)
   -- Gather the LSP symbols for which we want to add flares.
   local lsp_symbols = get_document_symbols(bufnr)
 
-  -- We clear previously added flares while adding new ones.
+  -- We clear previously added flares while adding new ones,
+  -- since clearing all flares in advance leads to jittering.
   -- To that end, we keep track of the position at which we
   -- last added a new flare and then clear all the ones between
-  -- this last one and the new one we add.
-  local last_line = 0
+  -- this last one and the new one we add. Note that we have to
+  -- deal with backgrounds and non-backgrounds separately, since
+  -- we draw the whole background a symbol, and may find
+  -- additional symbols before reaching the end of the background.
+  local clear_flares_from = 0
+  local clear_background_flares_from = 0
 
   for _, symbol in ipairs(lsp_symbols) do
     -- Where to add the flare:
@@ -323,18 +397,25 @@ local function add_flares(bufnr)
     -- What to display for that flare:
     local display_string = get_flare_display_string_for_symbol(bufnr, symbol)
 
-    -- Clear the old flares between the last one added and the new one we want to add.
-    if last_line <= start_line then
-      clear_flares_in_lines(bufnr, last_line + 1, start_line + 1)
+    -- Clear the old flares between the last one added and
+    -- the new one we want to add.
+    if clear_flares_from <= start_line then
+      clear_flares_in_lines(bufnr, clear_flares_from + 1, start_line + 1)
     end
 
-    -- Update the last line to the line of the current symbol.
-    last_line = math.max(start_line, last_line)
+    -- Clear the old background flares between the last one
+    -- added and the new one we want to add.
+    if clear_background_flares_from <= start_line then
+      clear_flares_in_lines(bufnr, clear_background_flares_from + 1, start_line + 1, flares_background_ns)
+    end
 
-    -- Draw the background for functions and methods, if enabled.
+    -- The next time we want to clear flares from where this symbol starts.
+    clear_flares_from = math.max(start_line, clear_flares_from)
+
+    -- Draw the background for symbols, if enabled.
     if symbol_has_background(symbol) then
       add_background(bufnr, start_line, end_line)
-      last_line = math.max(end_line, last_line)
+      clear_background_flares_from = math.max(end_line, clear_background_flares_from)
     end
 
     if M.mode == "inline" then
@@ -348,7 +429,8 @@ local function add_flares(bufnr)
   end
 
   -- Clear all the remaining flares in the buffer.
-  clear_flares_in_lines(bufnr, last_line + 1)
+  clear_flares_in_lines(bufnr, clear_flares_from + 1, nil, flares_ns)
+  clear_flares_in_lines(bufnr, clear_background_flares_from + 1, nil, flares_background_ns)
 end
 
 -- ######## FLARE HIDING ########
@@ -541,6 +623,7 @@ end
 
 --- Setup the flares.nvim plugin with options.
 ---@param opts table: Configuration opts. Keys: mode, display_contents, icon_for_kind.
+-- Update the icon_for_kind in M.setup to include a comment icon
 M.setup = function(opts)
   if is_setup then
     return
@@ -566,6 +649,7 @@ M.setup = function(opts)
     [6] = opts.icons and opts.icons.Method or "",
     [9] = opts.icons and opts.icons.Constructor or "",
     [12] = opts.icons and opts.icons.Function or "",
+    [999] = opts.icons and opts.icons.Comment or "󰆉",
   }
 
   register_highlight_groups()
