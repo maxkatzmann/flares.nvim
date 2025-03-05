@@ -162,9 +162,9 @@ local function get_comment_symbols(bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
   -- Get comment string for the current filetype
-  local commentstring = vim.api.nvim_get_option_value("commentstring", { buf = bufnr })
+  local comment_string = vim.api.nvim_get_option_value("comment_string", { buf = bufnr })
   -- Extract just the comment prefix (without the format specifier)
-  local comment_prefix = commentstring:match("(.*)%%s") or commentstring
+  local comment_prefix = comment_string:match("(.*)%%s") or comment_string
   comment_prefix = vim.trim(comment_prefix)
 
   -- If we can't determine a comment string, use some common defaults
@@ -659,12 +659,13 @@ local function setup_update_events(bufnr)
     end,
   })
 
-  -- Add cursor movement tracking to allow for hiding flares in the cursorline.
+  -- Add cursor movement tracking to allow for hiding flares in the cursor line.
   vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
     group = group,
     buffer = bufnr,
     callback = function()
-      -- Nothing to do if cursorline is not enabled.
+      -- Nothing to do if cursor line is not enabled.
+      ---@diagnostic disable-next-line: undefined-field
       if not vim.opt.cursorline:get() then
         return
       end
