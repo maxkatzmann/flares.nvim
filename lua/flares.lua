@@ -162,7 +162,7 @@ local function get_comment_symbols(bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
   -- Get comment string for the current filetype
-  local comment_string = vim.api.nvim_get_option_value("comment_string", { buf = bufnr })
+  local comment_string = vim.api.nvim_get_option_value("commentstring", { buf = bufnr })
   -- Extract just the comment prefix (without the format specifier)
   local comment_prefix = comment_string:match("(.*)%%s") or comment_string
   comment_prefix = vim.trim(comment_prefix)
