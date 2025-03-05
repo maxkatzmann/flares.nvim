@@ -636,13 +636,26 @@ local function setup_update_events(bufnr)
     end,
   })
 
-  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "WinResized", "WinNew" }, {
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
     group = group,
     buffer = bufnr,
     callback = function()
       debounced_update(function()
         add_flares(bufnr)
       end, 500)
+    end,
+  })
+
+  -- Compared to the other events, we do not debounce here
+  vim.api.nvim_create_autocmd({
+    "WinResized",
+    "WinNew",
+    "BufWritePost",
+  }, {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      add_flares(bufnr)
     end,
   })
 
