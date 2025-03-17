@@ -636,7 +636,7 @@ local function setup_update_events(bufnr)
     end,
   })
 
-  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufWritePost" }, {
     group = group,
     buffer = bufnr,
     callback = function()
@@ -650,7 +650,6 @@ local function setup_update_events(bufnr)
   vim.api.nvim_create_autocmd({
     "WinResized",
     "WinNew",
-    "BufWritePost",
   }, {
     group = group,
     buffer = bufnr,
