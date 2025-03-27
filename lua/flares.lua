@@ -75,9 +75,11 @@ local function debounced_update(fn, delay)
     0,
     vim.schedule_wrap(function()
       fn()
-      timer:stop()
-      timer:close()
-      timer = nil
+      if timer then
+        timer:stop()
+        timer:close()
+        timer = nil
+      end
     end)
   )
 end
