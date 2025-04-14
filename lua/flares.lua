@@ -455,6 +455,11 @@ end
 --- Add flares to a buffer based on LSP (and comment) document symbols.
 ---@param bufnr number: The buffer number.
 local function add_flares(bufnr)
+  -- Check whether the plugin is enabled
+  if not M.enabled then
+    return
+  end
+
   -- Check whether we have a valid mode for displaying flares.
   if not vim.tbl_contains({ "inline", "above" }, M.mode) then
     error("[Flares] Invalid display mode: " .. tostring(M.mode))
@@ -638,13 +643,21 @@ local function setup_update_events(bufnr)
     end,
   })
 
-  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "BufWritePost" }, {
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
     group = group,
     buffer = bufnr,
     callback = function()
       debounced_update(function()
         add_flares(bufnr)
       end, 500)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd({ "BufWritePost" }, {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      add_flares(bufnr)
     end,
   })
 
@@ -744,6 +757,7 @@ M.setup = function(opts)
 
   opts = opts or {}
 
+  M.enabled = true
   M.mode = opts.mode or "inline"
 
   M.enabled_flares = opts.enabled_flares or get_symbol_kind_names()
@@ -782,7 +796,7 @@ end
 -- Clear user command before re-defining it.
 pcall(vim.api.nvim_del_user_command, "FlaresShow")
 
-vim.api.nvim_create_user_command("FlaresShow", function(opts)
+local function show(opts)
   local args = vim.split(opts.args, " ")
 
   -- Evaluating the mode argument.
@@ -818,6 +832,11 @@ vim.api.nvim_create_user_command("FlaresShow", function(opts)
 
   attach_to_buffer(current_buffer())
   add_flares(current_buffer())
+end
+
+vim.api.nvim_create_user_command("FlaresShow", function(opts)
+  M.enabled = true
+  show(opts)
 end, {
   nargs = "*",
   complete = function(_, line, _)
@@ -835,6 +854,7 @@ pcall(vim.api.nvim_del_user_command, "FlaresHide")
 vim.api.nvim_create_user_command("FlaresHide", function()
   clear_all_flares(current_buffer())
   clear_autocommands()
+  M.enabled = false
 end, { range = true })
 
 return M
