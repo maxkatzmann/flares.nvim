@@ -491,6 +491,11 @@ local function add_flares(bufnr)
   clear_flares_in_lines(bufnr, clear_background_flares_from, clear_background_flares_from + 1, flares_background_ns)
 
   for _, symbol in ipairs(lsp_symbols) do
+    -- Skip symbols without range information
+    if not symbol.range or not symbol.range.start or not symbol.range["end"] then
+      goto continue
+    end
+
     -- Where to add the flare:
     local start_line = symbol.range.start.line
     local end_line = symbol.range["end"].line
@@ -529,6 +534,8 @@ local function add_flares(bufnr)
     else -- symbol is comment
       add_comment_flare(bufnr, start_line, " " .. display_string, "FlaresComment")
     end
+
+    ::continue::
   end
 
   -- Clear all the remaining flares in the buffer.
