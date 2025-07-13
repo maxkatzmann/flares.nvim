@@ -264,6 +264,13 @@ local function get_document_symbols(bufnr)
 
   -- Sort all symbols by start line for proper ordering
   table.sort(symbols, function(a, b)
+    -- Handle cases where symbols might not have range information
+    if not a.range or not a.range.start then
+      return false
+    end
+    if not b.range or not b.range.start then
+      return true
+    end
     return a.range.start.line < b.range.start.line
   end)
 
